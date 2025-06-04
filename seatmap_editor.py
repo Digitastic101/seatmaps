@@ -45,13 +45,14 @@ if uploaded_file and run_process:
             cleaned_input = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1-\2", cleaned_input)  # '23 - 51' -> '23-51'
             cleaned_input = re.sub(r"(\D+)(\d+)-(\d+)", lambda m: f"{m.group(1)}{m.group(2)}-{m.group(1)}{m.group(3)}", cleaned_input)  # 'O23-51' -> 'O23-O51'
 
-            # Parse multiple seat ranges
-            all_available_seats = set()
-            pattern = re.compile(r"(?P<section>[\w\s]+?)\s+(?P<start>\w+)(?:\s*to\s*|\s*-\s*|-)(?P<end>\w+)", re.IGNORECASE)
+            # Fix section names to allow internal spaces (e.g., District 2)
+            pattern = re.compile(r"(?P<section>[A-Za-z0-9 ]+?)\s+(?P<start>[A-Za-z]\d+)(?:\s*to\s*|\s*-\s*|-)(?P<end>[A-Za-z]?\d+)", re.IGNORECASE)
             matches = pattern.findall(cleaned_input)
 
-            st.markdown("### 🔍 Parsed Input Ranges")
+            all_available_seats = set()
             debug_table = []
+
+            st.markdown("### 🔍 Parsed Input Ranges")
 
             if not matches:
                 st.error("Please enter valid seat ranges like 'Stalls O23 to O51', 'Stalls O23-O51', or 'Stalls O 23-51'.")
