@@ -12,6 +12,11 @@ seat_range_input = st.text_input(
     placeholder="Stalls O23 to O51, Dress Circle D3 to D6"
 )
 
+price_input = st.text_input(
+    "Enter new price for all seats (optional)",
+    placeholder="e.g. 65"
+)
+
 def generate_seat_range(start, end):
     row = re.match(r"(\D+)", start).group(1)
     start_num = int(re.search(r"\d+", start).group())
@@ -36,7 +41,7 @@ if uploaded_file and seat_range_input:
                 seat_range = generate_seat_range(start_seat.upper(), end_seat.upper())
                 all_available_seats.update((section_name.strip().lower(), s) for s in seat_range)
 
-            # Update seat statuses using section_name from parent object
+            # Update all seat statuses and prices
             for section in seat_data.values():
                 if 'rows' in section:
                     parent_section_name = section.get('section_name', '').strip().lower()
@@ -44,6 +49,8 @@ if uploaded_file and seat_range_input:
                         for seat in row['seats'].values():
                             seat_number = seat['number'].upper()
                             seat['status'] = 'av' if (parent_section_name, seat_number) in all_available_seats else 'uav'
+                            if price_input.strip():
+                                seat['price'] = price_input.strip()
 
             # Save updated JSON
             updated_json = json.dumps(seat_data, indent=2)
@@ -57,4 +64,3 @@ if uploaded_file and seat_range_input:
 
     except Exception as e:
         st.error(f"❌ Error: {e}")
-
