@@ -50,12 +50,20 @@ if uploaded_file and run_process:
             pattern = re.compile(r"(?P<section>[\w\s]+?)\s+(?P<start>\w+)(?:\s*to\s*|\s*-\s*|-)(?P<end>\w+)", re.IGNORECASE)
             matches = pattern.findall(cleaned_input)
 
+            st.markdown("### 🔍 Parsed Input Ranges")
+            debug_table = []
+
             if not matches:
                 st.error("Please enter valid seat ranges like 'Stalls O23 to O51', 'Stalls O23-O51', or 'Stalls O 23-51'.")
             else:
                 for section_name, start_seat, end_seat in matches:
+                    normalized_section = section_name.strip().lower()
                     seat_range = generate_seat_range(start_seat.upper(), end_seat.upper())
-                    all_available_seats.update((section_name.strip().lower(), s.upper()) for s in seat_range)
+                    for s in seat_range:
+                        all_available_seats.add((normalized_section, s.upper()))
+                        debug_table.append((normalized_section, s.upper()))
+
+                st.table(debug_table)
 
                 # Update all seat statuses and prices
                 for section in seat_data.values():
