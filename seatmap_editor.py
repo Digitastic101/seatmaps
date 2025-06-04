@@ -8,8 +8,8 @@ st.title("🎭 Seat Map Availability Editor")
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 seat_range_input = st.text_input(
-    "Enter seat ranges (e.g. Stalls O23 to O51, Dress Circle D3 to D6)",
-    placeholder="Stalls O23 to O51, Dress Circle D3 to D6"
+    "Enter seat ranges (e.g. Stalls O23 to O51, Stalls O23-O51, Dress Circle D3-D6)",
+    placeholder="Stalls O23 to O51, Dress Circle D3-D6"
 )
 
 price_input = st.text_input(
@@ -39,13 +39,13 @@ if uploaded_file and run_process:
             raw_data = uploaded_file.read().decode("utf-8")
             seat_data = json.loads(raw_data)
 
-            # Parse multiple seat ranges
+            # Parse multiple seat ranges, supporting variations in spacing
             all_available_seats = set()
-            pattern = re.compile(r"(?P<section>[\w\s]+)\s+(?P<start>\w+?)\s+to\s+(?P<end>\w+)", re.IGNORECASE)
+            pattern = re.compile(r"(?P<section>[\w\s]+?)\s+(?P<start>\w+)(?:\s*to\s*|\s*-\s*|-)\s*(?P<end>\w+)", re.IGNORECASE)
             matches = pattern.findall(seat_range_input.strip())
 
             if not matches:
-                st.error("Please enter valid seat ranges like 'Stalls O23 to O51, Dress Circle D3 to D6'.")
+                st.error("Please enter valid seat ranges like 'Stalls O23 to O51', 'Stalls O23-O51', or 'Dress Circle D3-D6'.")
             else:
                 for section_name, start_seat, end_seat in matches:
                     seat_range = generate_seat_range(start_seat.upper(), end_seat.upper())
