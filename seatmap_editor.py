@@ -54,8 +54,6 @@ if uploaded_file and run_process:
             all_available_seats = set()
             debug_table = []
 
-            st.markdown("### 🔍 Parsed Input Ranges")
-
             if not matches:
                 st.error("Please enter valid seat ranges like 'Stalls O23 to O51', 'Stalls O23-O51', or 'Stalls O 23-51'.")
             else:
@@ -66,6 +64,11 @@ if uploaded_file and run_process:
                         all_available_seats.add((normalized_section, s.upper()))
                         debug_table.append((normalized_section, s.upper()))
 
+                if matched_seats_output:
+                    st.markdown("### ✅ Seats marked as available:")
+                    st.write(", ".join(matched_seats_output))
+
+                st.markdown("### 🔍 Parsed Input Ranges")
                 st.table(debug_table)
 
                 # Update all seat statuses and prices
@@ -93,10 +96,7 @@ if uploaded_file and run_process:
                     mime="application/json"
                 )
 
-                if matched_seats_output:
-                    st.markdown("### ✅ Seats marked as available:")
-                    st.write(", ".join(matched_seats_output))
-                else:
+                if not matched_seats_output:
                     st.warning("No matching seats found for the provided input.")
 
         except Exception as e:
