@@ -8,7 +8,7 @@ st.title("🎭 Seat Map Availability Editor")
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 seat_range_input = st.text_input(
-    "Enter seat ranges (e.g. Stalls O23 to O51, Stalls O23-O51, Dress Circle D3-D6)",
+    "Enter seat ranges (e.g. Stalls O23 to O51, Stalls O23-O51, Stalls O23-51, Dress Circle D3-D6)",
     placeholder="Stalls O23 to O51, Dress Circle D3-D6"
 )
 
@@ -22,7 +22,11 @@ run_process = col1.button("▶️ Go")
 reset = col2.button("🔄 Reset")
 
 def generate_seat_range(start, end):
-    row = re.match(r"(\D+)", start).group(1)
+    row_match = re.match(r"(\D+)", start)
+    if row_match:
+        row = row_match.group(1)
+    else:
+        raise ValueError("Invalid row format in seat number")
     start_num = int(re.search(r"\d+", start).group())
     end_num = int(re.search(r"\d+", end).group())
     return [f"{row}{i}" for i in range(start_num, end_num + 1)]
@@ -39,13 +43,16 @@ if uploaded_file and run_process:
             raw_data = uploaded_file.read().decode("utf-8")
             seat_data = json.loads(raw_data)
 
-            # Parse multiple seat ranges, supporting variations in spacing
+            # Normalize ranges like O23-51 to O23-O51
+            normalized_input = re.sub(r"(\D+)(\d+)\s*-\s*(\d+)", lambda m: f"{m.group(1)}{m.group(2)}-{m.group(1)}{m.group(3)}", seat_range_input.strip())
+
+            # Parse multiple seat ranges
             all_available_seats = set()
-            pattern = re.compile(r"(?P<section>[\w\s]+?)\s+(?P<start>\w+)(?:\s*to\s*|\s*-\s*|-)\s*(?P<end>\w+)", re.IGNORECASE)
-            matches = pattern.findall(seat_range_input.strip())
+            pattern = re.compile(r"(?P<section>[\w\s]+?)\s+(?P<start>\w+)(?:\s*to\s*|\s*-\s*|-)(?P<end>\w+)", re.IGNORECASE)
+            matches = pattern.findall(normalized_input)
 
             if not matches:
-                st.error("Please enter valid seat ranges like 'Stalls O23 to O51', 'Stalls O23-O51', or 'Dress Circle D3-D6'.")
+                st.error("Please enter valid seat ranges like 'Stalls O23 to O51', 'Stalls O23-O51', or 'Stalls O23-51'.")
             else:
                 for section_name, start_seat, end_seat in matches:
                     seat_range = generate_seat_range(start_seat.upper(), end_seat.upper())
