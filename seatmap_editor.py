@@ -64,13 +64,6 @@ if uploaded_file and run_process:
                         all_available_seats.add((normalized_section, s.upper()))
                         debug_table.append((normalized_section, s.upper()))
 
-                if matched_seats_output:
-                    st.markdown("### ✅ Seats marked as available:")
-                    st.write(", ".join(matched_seats_output))
-
-                st.markdown("### 🔍 Parsed Input Ranges")
-                st.table(debug_table)
-
                 # Update all seat statuses and prices
                 for section in seat_data.values():
                     if 'rows' in section:
@@ -89,6 +82,13 @@ if uploaded_file and run_process:
                 # Save updated JSON
                 updated_json = json.dumps(seat_data, indent=2)
                 st.success("✅ Seat map updated successfully!")
+
+                st.markdown("### ✅ Seats marked as available:")
+                if matched_seats_output:
+                    st.write(", ".join(matched_seats_output))
+                else:
+                    st.warning("No matching seats found for the provided input.")
+
                 st.download_button(
                     label="Download Updated JSON",
                     data=updated_json,
@@ -96,8 +96,8 @@ if uploaded_file and run_process:
                     mime="application/json"
                 )
 
-                if not matched_seats_output:
-                    st.warning("No matching seats found for the provided input.")
+                st.markdown("### 🔍 Parsed Input Ranges")
+                st.table(debug_table)
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
