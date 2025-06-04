@@ -40,13 +40,15 @@ if uploaded_file and run_process:
             raw_data = uploaded_file.read().decode("utf-8")
             seat_data = json.loads(raw_data)
 
-            # Normalize all spacing formats
-            cleaned_input = re.sub(r"(\D)\s+(\d+)", r"\1\2", seat_range_input.strip())  # 'O 23' -> 'O23'
-            cleaned_input = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1-\2", cleaned_input)  # '23 - 51' -> '23-51'
-            cleaned_input = re.sub(r"(\D+)(\d+)-(\d+)", lambda m: f"{m.group(1)}{m.group(2)}-{m.group(1)}{m.group(3)}", cleaned_input)  # 'O23-51' -> 'O23-O51'
+            # Step 1: collapse letter+number like 'J 79' -> 'J79'
+            cleaned_input = re.sub(r"\b([A-Za-z])\s+(\d+)\b", r"\1\2", seat_range_input.strip())
+            # Step 2: normalize range dashes like '79 - 86' -> '79-86'
+            cleaned_input = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1-\2", cleaned_input)
+            # Step 3: convert 'J79-86' to 'J79-J86'
+            cleaned_input = re.sub(r"([A-Za-z]+)(\d+)-(\d+)", lambda m: f"{m.group(1)}{m.group(2)}-{m.group(1)}{m.group(3)}", cleaned_input)
 
             # Fix section names to allow internal spaces (e.g., District 2)
-            pattern = re.compile(r"(?P<section>[A-Za-z0-9 ]+?)\s+(?P<start>[A-Za-z]\d+)(?:\s*to\s*|\s*-\s*|-)(?P<end>[A-Za-z]?\d+)", re.IGNORECASE)
+            pattern = re.compile(r"(?P<section>[A-Za-z0-9 ]+?)\s+(?P<start>[A-Za-z]\d+)(?:\s*to\s*|\s*-\s*|-)(?P<end>[A-Za-z]?[0-9]+)", re.IGNORECASE)
             matches = pattern.findall(cleaned_input)
 
             all_available_seats = set()
