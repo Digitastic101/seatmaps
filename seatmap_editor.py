@@ -19,6 +19,8 @@ price_input = st.text_input(
 
 run_process = st.button("▶️ Go")
 
+matched_seats_output = []
+
 def generate_seat_range(start, end):
     row_match = re.match(r"(\D+)", start)
     if row_match:
@@ -53,7 +55,7 @@ if uploaded_file and run_process:
             else:
                 for section_name, start_seat, end_seat in matches:
                     seat_range = generate_seat_range(start_seat.upper(), end_seat.upper())
-                    all_available_seats.update((section_name.strip().lower(), s) for s in seat_range)
+                    all_available_seats.update((section_name.strip().lower(), s.upper()) for s in seat_range)
 
                 # Update all seat statuses and prices
                 for section in seat_data.values():
@@ -62,7 +64,11 @@ if uploaded_file and run_process:
                         for row in section['rows'].values():
                             for seat in row['seats'].values():
                                 seat_number = seat['number'].upper()
-                                seat['status'] = 'av' if (parent_section_name, seat_number) in all_available_seats else 'uav'
+                                if (parent_section_name, seat_number) in all_available_seats:
+                                    seat['status'] = 'av'
+                                    matched_seats_output.append(f"{section.get('section_name', '')} {seat_number}")
+                                else:
+                                    seat['status'] = 'uav'
                                 if price_input.strip():
                                     seat['price'] = price_input.strip()
 
@@ -75,6 +81,12 @@ if uploaded_file and run_process:
                     file_name="updated_seatmap.json",
                     mime="application/json"
                 )
+
+                if matched_seats_output:
+                    st.markdown("### ✅ Seats marked as available:")
+                    st.write(", ".join(matched_seats_output))
+                else:
+                    st.warning("No matching seats found for the provided input.")
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
