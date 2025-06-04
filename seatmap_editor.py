@@ -8,7 +8,7 @@ st.title("🎭 Seat Map Availability Editor")
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 seat_range_input = st.text_input(
-    "Enter seat ranges (e.g. Stalls O23 to O51, Stalls O23-O51, Stalls O23-51, Dress Circle D3-D6)",
+    "Enter seat ranges (e.g. Stalls O23 to O51, Stalls O 23-51, Dress Circle D 3 - D 6)",
     placeholder="Stalls O23 to O51, Dress Circle D3-D6"
 )
 
@@ -43,8 +43,9 @@ if uploaded_file and run_process:
             raw_data = uploaded_file.read().decode("utf-8")
             seat_data = json.loads(raw_data)
 
-            # Normalize ranges like O23-51 to O23-O51
-            normalized_input = re.sub(r"(\D+)(\d+)\s*-\s*(\d+)", lambda m: f"{m.group(1)}{m.group(2)}-{m.group(1)}{m.group(3)}", seat_range_input.strip())
+            # Normalize formats like 'O 23-51' to 'O23-O51'
+            cleaned_input = re.sub(r"(\D)\s+(\d+)", r"\1\2", seat_range_input.strip())
+            normalized_input = re.sub(r"(\D+)(\d+)\s*[-]\s*(\d+)", lambda m: f"{m.group(1)}{m.group(2)}-{m.group(1)}{m.group(3)}", cleaned_input)
 
             # Parse multiple seat ranges
             all_available_seats = set()
@@ -52,7 +53,7 @@ if uploaded_file and run_process:
             matches = pattern.findall(normalized_input)
 
             if not matches:
-                st.error("Please enter valid seat ranges like 'Stalls O23 to O51', 'Stalls O23-O51', or 'Stalls O23-51'.")
+                st.error("Please enter valid seat ranges like 'Stalls O23 to O51', 'Stalls O23-O51', or 'Stalls O 23-51'.")
             else:
                 for section_name, start_seat, end_seat in matches:
                     seat_range = generate_seat_range(start_seat.upper(), end_seat.upper())
