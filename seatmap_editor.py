@@ -16,10 +16,8 @@ price_input = st.text_input(
     placeholder="e.g. 65"
 )
 
-# ✅ Checkbox to update only price
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
 
-# ✅ Button to run the update
 if st.button("▶️ Go"):
     matched_seats_output = []
 
@@ -36,9 +34,7 @@ if st.button("▶️ Go"):
     if not uploaded_file:
         st.error("Please upload a seat map JSON file.")
     elif not seat_range_input and not price_only_mode:
-        st.error("Please enter seat ranges before pressing Go.")
-    elif not price_input.strip():
-        st.error("Please enter a price to update.")
+        st.error("Please enter seat ranges OR tick 'Only update seat prices'.")
     else:
         try:
             raw_data = uploaded_file.read().decode("utf-8")
@@ -65,7 +61,7 @@ if st.button("▶️ Go"):
                         all_available_seats.add((normalized_section, s.upper()))
                         debug_table.append((normalized_section, s.upper()))
 
-            # 🔁 Update logic
+            # 🔁 Process seat updates
             for section in seat_data.values():
                 if 'rows' in section:
                     parent_section_name = section.get('section_name', '').strip().lower()
@@ -74,18 +70,22 @@ if st.button("▶️ Go"):
                             seat_number = seat['number'].upper()
                             key = (parent_section_name, seat_number)
 
+                            # 🔧 PRICE-ONLY mode: update all 'av' seats OR matched ones
                             if price_only_mode:
-                                # 🔧 Update only seats with 'av' status OR matched seats if range is given
                                 if (not seat_range_input and seat.get('status') == 'av') or (seat_range_input and key in all_available_seats):
-                                    seat['price'] = price_input.strip()
-                                    matched_seats_output.append(f"{section.get('section_name', '')} {seat_number}")
+                                    if price_input.strip():
+                                        seat['price'] = price_input.strip()
+                                        matched_seats_output.append(f"{section.get('section_name', '')} {seat_number}")
                             else:
-                                if key in all_available_seats:
-                                    seat['status'] = 'av'
-                                    matched_seats_output.append(f"{section.get('section_name', '')} {seat_number}")
-                                    seat['price'] = price_input.strip()
-                                else:
-                                    seat['status'] = 'uav'
+                                # 🔧 AVAILABILITY update mode (range required)
+                                if seat_range_input:
+                                    if key in all_available_seats:
+                                        seat['status'] = 'av'
+                                        matched_seats_output.append(f"{section.get('section_name', '')} {seat_number}")
+                                        if price_input.strip():
+                                            seat['price'] = price_input.strip()
+                                    else:
+                                        seat['status'] = 'uav'
 
             # ✅ Output results
             updated_json = json.dumps(seat_data, indent=2)
