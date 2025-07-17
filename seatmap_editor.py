@@ -117,7 +117,7 @@ if uploaded_file:
                         requested_seats.add((section_name, norm))
                         debug_table.append((section_name, full_seat))
 
-            for section in seat_data.values():
+                        for section in seat_data.values():
                 section_key = section.get('section_name', '').strip().lower()
                 if "rows" not in section:
                     continue
@@ -125,7 +125,7 @@ if uploaded_file:
                 for row in section["rows"].values():
                     for seat in row["seats"].values():
                         seat_label = seat.get("number", "").strip()
-                                                normalized_seat_label = re.sub(r"\s*", "", seat_label).lower()
+                        normalized_seat_label = re.sub(r"\s*", "", seat_label).lower()
                         key = (section_key, normalized_seat_label)
 
                         if price_input.strip():
@@ -169,4 +169,3 @@ if uploaded_file:
 
     except Exception as e:
         st.error(f"❌ Error reading file: {e}")
-
