@@ -125,4 +125,48 @@ if uploaded_file:
                 for row in section["rows"].values():
                     for seat in row["seats"].values():
                         seat_label = seat.get("number", "").strip()
-                        normalized_seat_label
+                                                normalized_seat_label = re.sub(r"\s*", "", seat_label).lower()
+                        key = (section_key, normalized_seat_label)
+
+                        if price_input.strip():
+                            seat['price'] = price_input.strip()
+
+                        if not price_only_mode and seat_range_input:
+                            if key in requested_seats:
+                                seat['status'] = 'av'
+                                found_seats.add(key)
+                                matched_seats_output.append(f"{section['section_name']} {seat_label}")
+                            else:
+                                seat['status'] = 'uav'
+
+                    if price_input.strip():
+                        row['price'] = price_input.strip()
+                if price_input.strip():
+                    section['price'] = price_input.strip()
+
+            not_found = requested_seats - found_seats
+
+            st.markdown("### ✅ Seats Updated")
+            if matched_seats_output:
+                st.write(", ".join(sorted(matched_seats_output)))
+            else:
+                st.info("No seats were updated.")
+
+            if not_found:
+                missing = ", ".join(f"{s.title()} {n}" for s, n in sorted(not_found))
+                st.warning(f"⚠️ The following seats were **not** found: {missing}")
+
+            st.download_button(
+                "Download Updated JSON",
+                json.dumps(seat_data, indent=2),
+                file_name="updated_seatmap.json",
+                mime="application/json"
+            )
+
+            if seat_range_input:
+                st.markdown("### 🔍 Parsed Seat Targets")
+                st.table(debug_table)
+
+    except Exception as e:
+        st.error(f"❌ Error reading file: {e}")
+
