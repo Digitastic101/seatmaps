@@ -55,7 +55,8 @@ if st.button("▶️ Go"):
 
                     for seat_num in range(start, end + 1):
                         full_seat = f"{row_prefix.strip()}{seat_num}".strip()
-                        requested_seats.add((section_name, full_seat))
+normalized_full_seat = re.sub(r"\s*", "", full_seat).lower()
+requested_seats.add((section_name, normalized_full_seat))
                         debug_table.append((section_name, full_seat))
 
             # ─── Update seat statuses and prices ──────────────────────
@@ -67,7 +68,8 @@ if st.button("▶️ Go"):
                 for row in section['rows'].values():
                     for seat in row['seats'].values():
                         seat_label = seat.get("number", "").strip()
-                        key = (section_key, seat_label)
+                        normalized_seat_label = re.sub(r"\s*", "", seat_label).lower()
+key = (section_key, normalized_seat_label)
 
                         if price_input.strip():
                             seat['price'] = price_input.strip()
