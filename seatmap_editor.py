@@ -18,11 +18,11 @@ price_input = st.text_input(
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
 
 def extract_row_and_number(seat_label):
-    # Try new format first (ROW X - Y)
+    # Try "ROW 3 - 67" format
     match = re.match(r"(ROW\s*\d+\s*-\s*)\s*(\d+)", seat_label.strip(), re.I)
     if match:
         return match.group(1).strip(), int(match.group(2))
-    # Then try old-style row + seat (e.g. C23)
+    # Try classic format like C23
     match = re.match(r"([A-Z]+)(\d+)", seat_label.strip(), re.I)
     if match:
         return match.group(1).strip(), int(match.group(2))
@@ -38,7 +38,12 @@ def compress_ranges(seat_numbers):
         grouped.append((start, end))
     return grouped
 
-# ─── Automatically show available seats on file upload ─────
+def sort_key(row_prefix):
+    match = re.search(r"(\d+)", row_prefix)
+    if match:
+        return (0, int(match.group(1)))  # numeric row (e.g. ROW 1 -)
+    return (1, row_prefix.upper())       # text row (e.g. A, B, C)
+
 if uploaded_file:
     try:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
@@ -48,13 +53,12 @@ if uploaded_file:
         st.markdown("### 🪑 Copy-Paste Friendly Available Seat Ranges")
 
         output_lines = []
+        row_map = {}
 
         for section in seat_data.values():
             section_name = section.get("section_name", "Unknown Section")
             if "rows" not in section:
                 continue
-
-            row_map = {}
 
             for row in section["rows"].values():
                 for seat in row["seats"].values():
@@ -64,13 +68,15 @@ if uploaded_file:
                         if row_prefix and seat_number:
                             row_map.setdefault((section_name, row_prefix), []).append(seat_number)
 
-            for (section_name, row_prefix), seat_nums in row_map.items():
-                ranges = compress_ranges(seat_nums)
-                for start, end in ranges:
-                    if start == end:
-                        output_lines.append(f"{section_name} {row_prefix}{start}")
-                    else:
-                        output_lines.append(f"{section_name} {row_prefix}{start}-{end}")
+        sorted_rows = sorted(row_map.items(), key=lambda x: (x[0][0].lower(), sort_key(x[0][1])))
+
+        for (section_name, row_prefix), seat_nums in sorted_rows:
+            ranges = compress_ranges(seat_nums)
+            for start, end in ranges:
+                if start == end:
+                    output_lines.append(f"{section_name} {row_prefix}{start}")
+                else:
+                    output_lines.append(f"{section_name} {row_prefix}{start}-{end}")
 
         if output_lines:
             copy_text = ", ".join(output_lines)
@@ -119,47 +125,4 @@ if uploaded_file:
                 for row in section["rows"].values():
                     for seat in row["seats"].values():
                         seat_label = seat.get("number", "").strip()
-                        normalized_seat_label = re.sub(r"\s*", "", seat_label).lower()
-                        key = (section_key, normalized_seat_label)
-
-                        if price_input.strip():
-                            seat['price'] = price_input.strip()
-
-                        if not price_only_mode and seat_range_input:
-                            if key in requested_seats:
-                                seat['status'] = 'av'
-                                found_seats.add(key)
-                                matched_seats_output.append(f"{section['section_name']} {seat_label}")
-                            else:
-                                seat['status'] = 'uav'
-
-                    if price_input.strip():
-                        row['price'] = price_input.strip()
-                if price_input.strip():
-                    section['price'] = price_input.strip()
-
-            not_found = requested_seats - found_seats
-
-            st.markdown("### ✅ Seats Updated")
-            if matched_seats_output:
-                st.write(", ".join(sorted(matched_seats_output)))
-            else:
-                st.info("No seats were updated.")
-
-            if not_found:
-                missing = ", ".join(f"{s.title()} {n}" for s, n in sorted(not_found))
-                st.warning(f"⚠️ The following seats were **not** found: {missing}")
-
-            st.download_button(
-                "Download Updated JSON",
-                json.dumps(seat_data, indent=2),
-                file_name="updated_seatmap.json",
-                mime="application/json"
-            )
-
-            if seat_range_input:
-                st.markdown("### 🔍 Parsed Seat Targets")
-                st.table(debug_table)
-
-    except Exception as e:
-        st.error(f"❌ Error reading file: {e}")
+                        normalized_seat_label
