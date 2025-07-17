@@ -18,11 +18,9 @@ price_input = st.text_input(
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
 
 def extract_row_and_number(seat_label):
-    # Try "ROW 3 - 67" format
     match = re.match(r"(ROW\s*\d+\s*-\s*)\s*(\d+)", seat_label.strip(), re.I)
     if match:
         return match.group(1).strip(), int(match.group(2))
-    # Try classic format like C23
     match = re.match(r"([A-Z]+)(\d+)", seat_label.strip(), re.I)
     if match:
         return match.group(1).strip(), int(match.group(2))
@@ -41,8 +39,8 @@ def compress_ranges(seat_numbers):
 def sort_key(row_prefix):
     match = re.search(r"(\d+)", row_prefix)
     if match:
-        return (0, int(match.group(1)))  # numeric row (e.g. ROW 1 -)
-    return (1, row_prefix.upper())       # text row (e.g. A, B, C)
+        return (0, int(match.group(1)))
+    return (1, row_prefix.upper())
 
 if uploaded_file:
     try:
@@ -84,7 +82,6 @@ if uploaded_file:
         else:
             st.info("No available seats found.")
 
-        # ─── Editing logic ─────
         if st.button("▶️ Go"):
             matched_seats_output = []
             requested_seats = set()
@@ -117,7 +114,7 @@ if uploaded_file:
                         requested_seats.add((section_name, norm))
                         debug_table.append((section_name, full_seat))
 
-                        for section in seat_data.values():
+            for section in seat_data.values():
                 section_key = section.get('section_name', '').strip().lower()
                 if "rows" not in section:
                     continue
