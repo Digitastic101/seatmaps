@@ -6,8 +6,8 @@ st.title("🎭 Seat Map Availability Editor")
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 seat_range_input = st.text_input(
-    "Enter seat ranges (e.g. Stalls O23-O51, Dress Circle D3-D6)",
-    placeholder="Stalls O23-O51, Dress Circle D3-D6"
+    "Enter seat ranges (e.g. Rausing Circle ROW 3 - 89-93, Rausing Circle ROW 7 - 128)",
+    placeholder="Rausing Circle ROW 3 - 89-93, Rausing Circle ROW 7 - 128"
 )
 
 price_input = st.text_input(
@@ -19,12 +19,6 @@ price_only_mode = st.checkbox("💸 Only update seat prices (leave availability 
 
 if st.button("▶️ Go"):
     matched_seats_output = []
-
-    def generate_seat_range(start, end):
-        row = re.match(r"(\D+)", start).group(1)
-        start_num = int(re.search(r"\d+", start).group())
-        end_num = int(re.search(r"\d+", end).group())
-        return [f"{row}{i}" for i in range(start_num, end_num + 1)]
 
     if not uploaded_file:
         st.error("Please upload a seat map JSON file.")
@@ -43,22 +37,26 @@ if st.button("▶️ Go"):
                 txt = seat_range_input
                 txt = re.sub(r"\b([A-Za-z])\s+(\d+)\b", r"\1\2", txt)
                 txt = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1-\2", txt)
-                txt = re.sub(r"([A-Za-z]+)(\d+)-(\d+)",
-                             lambda m: f"{m.group(1)}{m.group(2)}-{m.group(1)}{m.group(3)}", txt)
 
                 pattern = re.compile(
                     r"(?P<section>[A-Za-z0-9 ]+?)\s+"
-                    r"(?P<start>[A-Za-z]\d+)"
-                    r"(?:\s*(?:to|-)\s*|-\s*)"
-                    r"(?P<end>[A-Za-z]?\d+)",
+                    r"(?P<row_prefix>ROW\s*\d+\s*-\s*)?"
+                    r"(?P<start>\d+)"
+                    r"(?:\s*(?:to|-)\s*)"
+                    r"(?P<end>\d+)?",
                     re.I
                 )
 
-                for section_name, start_seat, end_seat in pattern.findall(txt):
-                    section_key = section_name.strip().lower()
-                    for s in generate_seat_range(start_seat.upper(), end_seat.upper()):
-                        requested_seats.add((section_key, s))
-                        debug_table.append((section_key, s))
+                for match in pattern.finditer(txt):
+                    section_name = match.group("section").strip().lower()
+                    row_prefix = match.group("row_prefix") or ""
+                    start = int(match.group("start"))
+                    end = int(match.group("end") or start)
+
+                    for seat_num in range(start, end + 1):
+                        full_seat = f"{row_prefix.strip()}{seat_num}".strip()
+                        requested_seats.add((section_name, full_seat))
+                        debug_table.append((section_name, full_seat))
 
             # ─── Update seat statuses and prices ──────────────────────
             for section in seat_data.values():
@@ -66,10 +64,10 @@ if st.button("▶️ Go"):
                     continue
                 section_key = section.get('section_name', '').strip().lower()
 
-                for row_key, row in section['rows'].items():
-                    for seat_key, seat in row['seats'].items():
-                        seat_num = seat['number'].upper()
-                        key = (section_key, seat_num)
+                for row in section['rows'].values():
+                    for seat in row['seats'].values():
+                        seat_label = seat.get("number", "").strip()
+                        key = (section_key, seat_label)
 
                         if price_input.strip():
                             seat['price'] = price_input.strip()
@@ -78,7 +76,7 @@ if st.button("▶️ Go"):
                             if key in requested_seats:
                                 seat['status'] = 'av'
                                 found_seats.add(key)
-                                matched_seats_output.append(f"{section['section_name']} {seat_num}")
+                                matched_seats_output.append(f"{section['section_name']} {seat_label}")
                             else:
                                 seat['status'] = 'uav'
 
@@ -115,47 +113,56 @@ if st.button("▶️ Go"):
                 st.markdown("### 🔍 Parsed Input Ranges")
                 st.table(debug_table)
 
-            # ─── NEW: Show available seats in seat-range input format ───────
+            # ─── Available Seats Output (copy-paste friendly) ──────────────
 
-            def compress_seat_numbers(seat_numbers, row_prefix):
-                nums = sorted([int(re.search(r'\d+', s).group()) for s in seat_numbers])
-                ranges = []
-                for k, g in itertools.groupby(enumerate(nums), lambda x: x[1] - x[0]):
-                    group = list(g)
-                    start = group[0][1]
-                    end = group[-1][1]
-                    if start == end:
-                        ranges.append(f"{row_prefix}{start}")
-                    else:
-                        ranges.append(f"{row_prefix}{start}-{row_prefix}{end}")
-                return ranges
+            def extract_row_and_number(seat_label):
+                match = re.match(r"(ROW \d+\s*-\s*)\s*(\d+)", seat_label.strip())
+                if match:
+                    return match.group(1).strip(), int(match.group(2))
+                return None, None
 
-            st.markdown("### 📋 Copy-Paste Seat Range Input (Available Only)")
+            def compress_ranges(seat_numbers):
+                seat_numbers.sort()
+                grouped = []
+                for _, group in itertools.groupby(enumerate(seat_numbers), lambda x: x[1] - x[0]):
+                    block = list(group)
+                    start = block[0][1]
+                    end = block[-1][1]
+                    grouped.append((start, end))
+                return grouped
 
-            seat_range_snippets = []
+            st.markdown("### 🪑 Copy-Paste Available Seat Ranges")
+
+            output_lines = []
 
             for section in seat_data.values():
-                section_name = section.get("section_name", "Unknown Section").strip()
+                section_name = section.get("section_name", "Unknown Section")
                 if "rows" not in section:
                     continue
 
-                for row_label, row in section["rows"].items():
-                    available_seats = [
-                        seat["number"].upper()
-                        for seat in row["seats"].values()
-                        if seat.get("status", "").lower() == "av"
-                    ]
+                row_map = {}
 
-                    if available_seats:
-                        compressed_ranges = compress_seat_numbers(available_seats, row_label.upper())
-                        for r in compressed_ranges:
-                            seat_range_snippets.append(f"{section_name} {r}")
+                for row in section["rows"].values():
+                    for seat in row["seats"].values():
+                        if seat.get("status", "").lower() == "av":
+                            seat_label = seat.get("number", "").strip()
+                            row_prefix, seat_number = extract_row_and_number(seat_label)
+                            if row_prefix and seat_number:
+                                row_map.setdefault((section_name, row_prefix), []).append(seat_number)
 
-            if seat_range_snippets:
-                seat_input_format = ", ".join(seat_range_snippets)
-                st.text_area("🧾 Use this format in 'Enter seat ranges':", value=seat_input_format, height=200)
+                for (section_name, row_prefix), seat_nums in row_map.items():
+                    ranges = compress_ranges(seat_nums)
+                    for start, end in ranges:
+                        if start == end:
+                            output_lines.append(f"{section_name} {row_prefix} {start}")
+                        else:
+                            output_lines.append(f"{section_name} {row_prefix} {start}-{end}")
+
+            if output_lines:
+                copy_text = ", ".join(output_lines)
+                st.text_area("📋 Paste this into 'Enter seat ranges':", value=copy_text, height=200)
             else:
-                st.info("No available seats found to format.")
+                st.info("No available seats found.")
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
