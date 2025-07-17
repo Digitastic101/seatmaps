@@ -6,8 +6,8 @@ st.title("🎭 Seat Map Availability Editor")
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 seat_range_input = st.text_input(
-    "Enter seat ranges (e.g. Rausing Circle ROW 3 - 89-93, Rausing Circle ROW 7 - 128)",
-    placeholder="Rausing Circle ROW 3 - 89-93, Rausing Circle ROW 7 - 128"
+    "Enter seat ranges (e.g. Stalls C23-C28, Rausing Circle ROW 3 - 89-93)",
+    placeholder="Stalls C23-C28, Rausing Circle ROW 3 - 89-93"
 )
 
 price_input = st.text_input(
@@ -18,7 +18,12 @@ price_input = st.text_input(
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
 
 def extract_row_and_number(seat_label):
+    # Try new format first (ROW X - Y)
     match = re.match(r"(ROW\s*\d+\s*-\s*)\s*(\d+)", seat_label.strip(), re.I)
+    if match:
+        return match.group(1).strip(), int(match.group(2))
+    # Then try old-style row + seat (e.g. C23)
+    match = re.match(r"([A-Z]+)(\d+)", seat_label.strip(), re.I)
     if match:
         return match.group(1).strip(), int(match.group(2))
     return None, None
@@ -63,9 +68,9 @@ if uploaded_file:
                 ranges = compress_ranges(seat_nums)
                 for start, end in ranges:
                     if start == end:
-                        output_lines.append(f"{section_name} {row_prefix} {start}")
+                        output_lines.append(f"{section_name} {row_prefix}{start}")
                     else:
-                        output_lines.append(f"{section_name} {row_prefix} {start}-{end}")
+                        output_lines.append(f"{section_name} {row_prefix}{start}-{end}")
 
         if output_lines:
             copy_text = ", ".join(output_lines)
@@ -73,7 +78,7 @@ if uploaded_file:
         else:
             st.info("No available seats found.")
 
-        # ─── Optional: Editing logic still available ─────
+        # ─── Editing logic ─────
         if st.button("▶️ Go"):
             matched_seats_output = []
             requested_seats = set()
@@ -87,7 +92,7 @@ if uploaded_file:
 
                 pattern = re.compile(
                     r"(?P<section>[A-Za-z0-9 ]+?)\s+"
-                    r"(?P<row_prefix>ROW\s*\d+\s*-\s*)?"
+                    r"(?P<row_prefix>(ROW\s*\d+\s*-\s*)|[A-Z]+)?"
                     r"(?P<start>\d+)"
                     r"(?:\s*(?:to|-)\s*)"
                     r"(?P<end>\d+)?",
@@ -106,7 +111,6 @@ if uploaded_file:
                         requested_seats.add((section_name, norm))
                         debug_table.append((section_name, full_seat))
 
-            # Update seats
             for section in seat_data.values():
                 section_key = section.get('section_name', '').strip().lower()
                 if "rows" not in section:
@@ -131,7 +135,6 @@ if uploaded_file:
 
                     if price_input.strip():
                         row['price'] = price_input.strip()
-
                 if price_input.strip():
                     section['price'] = price_input.strip()
 
