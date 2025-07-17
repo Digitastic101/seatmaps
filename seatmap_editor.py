@@ -126,3 +126,47 @@ if st.button("▶️ Go"):
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
+
+import itertools
+
+# ─── Helper: Convert list of seat numbers into compact ranges ─────────────
+def compress_seat_numbers(seat_numbers, row_prefix):
+    nums = sorted([int(re.search(r'\d+', s).group()) for s in seat_numbers])
+    ranges = []
+    for k, g in itertools.groupby(enumerate(nums), lambda x: x[1] - x[0]):
+        group = list(g)
+        start = group[0][1]
+        end = group[-1][1]
+        if start == end:
+            ranges.append(f"{row_prefix}{start}")
+        else:
+            ranges.append(f"{row_prefix}{start}-{row_prefix}{end}")
+    return ranges
+
+# ─── Generate copy-pasteable section for seat input ───────────────────────
+st.markdown("### 📋 Copy-Paste Seat Range Input (Available Only)")
+
+seat_range_snippets = []
+
+for section in seat_data.values():
+    section_name = section.get("section_name", "Unknown Section").strip()
+    if "rows" not in section:
+        continue
+
+    for row_label, row in section["rows"].items():
+        available_seats = [
+            seat["number"].upper()
+            for seat in row["seats"].values()
+            if seat.get("status", "").lower() == "av"
+        ]
+
+        if available_seats:
+            compressed_ranges = compress_seat_numbers(available_seats, row_label.upper())
+            for r in compressed_ranges:
+                seat_range_snippets.append(f"{section_name} {r}")
+
+if seat_range_snippets:
+    seat_input_format = ", ".join(seat_range_snippets)
+    st.text_area("🧾 Use this format in 'Enter seat ranges':", value=seat_input_format, height=200)
+else:
+    st.info("No available seats found to format.")
