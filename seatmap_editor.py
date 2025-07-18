@@ -83,6 +83,7 @@ if uploaded_file:
             st.info("No available seats found.")
 
         if st.button("▶️ Go"):
+            price_value = price_input.strip() if price_input.strip() else None
             matched_seats_output = []
             requested_seats = set()
             found_seats = set()
@@ -125,8 +126,8 @@ if uploaded_file:
                         normalized_seat_label = re.sub(r"\s*", "", seat_label).lower()
                         key = (section_key, normalized_seat_label)
 
-                        if price_input.strip():
-                            seat['price'] = price_input.strip()
+                        if price_value:
+                            seat['price'] = price_value
 
                         if not price_only_mode and seat_range_input:
                             if key in requested_seats:
@@ -136,10 +137,10 @@ if uploaded_file:
                             else:
                                 seat['status'] = 'uav'
 
-                    if price_input.strip():
-                        row['price'] = price_input.strip()
-                if price_input.strip():
-                    section['price'] = price_input.strip()
+                    if price_value:
+                        row['price'] = price_value
+                if price_value:
+                    section['price'] = price_value
 
             not_found = requested_seats - found_seats
 
