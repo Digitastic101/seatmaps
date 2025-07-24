@@ -76,7 +76,7 @@ if uploaded_file:
         # ---------------- run updates -----------------
         if st.button("▶️ Go"):
             price_value = price_input.strip() or None
-            matched, requested, found, debug = [], set(), set(), []
+            matched, requested, found = [], set(), set()
             updated_seats = []
 
             # ---- parse seat_range_input (if any) ----
@@ -86,7 +86,7 @@ if uploaded_file:
                 rx = re.compile(r"(?P<section>[A-Za-z0-9 ]+?)\s+"
                                 r"(?P<pref>(ROW\s*\d+\s*-\s*)|[A-Z]+)?"
                                 r"(?P<start>\d+)"
-                                r"(?:\s*(?:to|-)\s*)"
+                                r"(?:\s*(?:to|-)\s*)?"
                                 r"(?P<end>\d+)?", re.I)
                 for m in rx.finditer(txt):
                     sec = m.group("section").strip().lower()
@@ -95,7 +95,6 @@ if uploaded_file:
                     for n in range(a, b + 1):
                         full = f"{pref.strip()}{n}".strip()
                         requested.add((sec, re.sub(r"\s*", "", full).lower()))
-                        debug.append((sec, full))
 
             # ---- apply updates ----
             for sec in seat_data.values():
@@ -116,6 +115,9 @@ if uploaded_file:
                                     seat["status"] = "av"
                                 found.add(key)
                                 matched.append(f"{sec['section_name']} {label}")
+                                should_update = True
+                            elif not price_only_mode:
+                                seat["status"] = "uav"
                                 should_update = True
                         elif price_only_mode and price_value:
                             # No seat range, just update everything
@@ -160,10 +162,6 @@ if uploaded_file:
                                json.dumps(seat_data, indent=2),
                                file_name="updated_seatmap.json",
                                mime="application/json")
-
-            if seat_range_input:
-                st.markdown("### 🔍 Parsed Seat Targets")
-                st.table(debug)
 
     except Exception as e:
         st.error(f"❌ Error reading file: {e}")
