@@ -77,6 +77,7 @@ if uploaded_file:
         if st.button("▶️ Go"):
             price_value = price_input.strip() or None
             matched, requested, found, debug = [], set(), set(), []
+            updated_seats = []
 
             # ---- parse seat_range_input (if any) ----
             if seat_range_input:
@@ -107,15 +108,30 @@ if uploaded_file:
                         norm = re.sub(r"\s*", "", label).lower()
                         key = (sec_key, norm)
 
-                        if price_value:
-                            seat["price"] = price_value
-                        if not price_only_mode and seat_range_input:
+                        should_update = False
+
+                        if seat_range_input:
                             if key in requested:
-                                seat["status"] = "av"
+                                if not price_only_mode:
+                                    seat["status"] = "av"
                                 found.add(key)
                                 matched.append(f"{sec['section_name']} {label}")
-                            else:
-                                seat["status"] = "uav"
+                                should_update = True
+                        elif price_only_mode and price_value:
+                            # No seat range, just update everything
+                            should_update = True
+
+                        if should_update and price_value:
+                            seat["price"] = price_value
+
+                        if should_update:
+                            updated_seats.append({
+                                "Section": sec.get("section_name", ""),
+                                "Seat": label,
+                                "Status": seat.get("status", ""),
+                                "Price": seat.get("price", "")
+                            })
+
                     if price_value:
                         row["price"] = price_value
                 if price_value:
@@ -123,39 +139,21 @@ if uploaded_file:
 
             # ---- messaging ----
             if price_value:
-                st.success(f"💸 Prices updated to {price_value} on all seats, rows & sections.")
-            if not price_only_mode:
+                st.success(f"💸 Prices updated to {price_value} on applicable seats, rows & sections.")
+
+            if not price_only_mode and seat_range_input:
                 st.markdown("### ✅ Availability Updated")
                 st.write(", ".join(sorted(matched)) if matched else "No seat availability was changed.")
-
                 missing = requested - found
                 if missing:
                     st.warning("⚠️ Seats not found: " + ", ".join(f"{s.title()} {n}" for s, n in sorted(missing)))
 
             # ---- show updated seat prices ----
-            if matched:
+            if updated_seats:
                 st.markdown("### 🎟️ Updated Seats with Prices")
-                updated_seats = []
-                for sec in seat_data.values():
-                    sec_name = sec.get("section_name", "")
-                    if "rows" not in sec:
-                        continue
-                    for row in sec["rows"].values():
-                        for seat in row["seats"].values():
-                            label = seat.get("number", "").strip()
-                            norm = re.sub(r"\s*", "", label).lower()
-                            key = (sec_name.strip().lower(), norm)
-                            if key in found:
-                                updated_seats.append({
-                                    "Section": sec_name,
-                                    "Seat": label,
-                                    "Status": seat.get("status", ""),
-                                    "Price": seat.get("price", "")
-                                })
-                if updated_seats:
-                    st.dataframe(updated_seats)
-                else:
-                    st.info("No updated seat prices to display.")
+                st.dataframe(updated_seats)
+            else:
+                st.info("No updated seat prices to display.")
 
             # ---- download ----
             st.download_button("Download Updated JSON",
