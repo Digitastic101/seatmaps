@@ -83,7 +83,7 @@ if uploaded_file:
                     r"(?P<section>[A-Za-z0-9 ]+?)\s+"
                     r"(?P<pref>(row\s*\d+\s*-\s*|[a-z]{1,3}))?"
                     r"\s*(?P<start>\d+)"
-                    r"(?:\s*(?:to|–|-)\s*(?P<end>\d+))?",
+                    r"(?:\s*(?:to|–|-)+\s*(?P<end>\d+))?",
                     re.I
                 )
                 for m in rx.finditer(txt):
@@ -99,8 +99,12 @@ if uploaded_file:
                 sec_key = sec.get("section_name", "").strip().lower()
                 if "rows" not in sec:
                     continue
+                if price_value:
+                    sec["price"] = price_value
                 for row_key, row in sec["rows"].items():
-                    row_total_price = None
+                    if price_value:
+                        row["price"] = price_value
+                        row_price_map[f"{sec['section_name']} - {row_key}"] = price_value
                     for seat in row["seats"].values():
                         label = seat.get("number", "").strip()
                         norm = re.sub(r"\s*", "", label).lower()
@@ -120,7 +124,7 @@ if uploaded_file:
                         elif price_only_mode and price_value:
                             should_update = True
 
-                        if should_update and price_value:
+                        if price_value:
                             seat["price"] = price_value
 
                         if should_update:
@@ -131,14 +135,8 @@ if uploaded_file:
                                 "Price": seat.get("price", "")
                             })
 
-                    if price_value:
-                        row["price"] = price_value
-                        row_price_map[f"{sec['section_name']} - {row_key}"] = price_value
-                if price_value:
-                    sec["price"] = price_value
-
             if price_value:
-                st.success(f"💸 Prices updated to {price_value} on applicable seats, rows & sections.")
+                st.success(f"💸 Prices updated to {price_value} across all applicable seats, rows & sections.")
 
             if not price_only_mode and seat_range_input:
                 st.markdown("### ✅ Availability Updated")
