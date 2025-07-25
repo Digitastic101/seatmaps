@@ -48,11 +48,21 @@ if uploaded_file:
 
         # --------- build copy-paste list of available seats ---------
         row_map = {}
+        row_prices = []
+
         for sec in seat_data.values():
             sec_name = sec.get("section_name", "Unknown Section")
             if "rows" not in sec:
                 continue
-            for row in sec["rows"].values():
+            for row_label, row in sec["rows"].items():
+                # Track row-level prices
+                row_price = row.get("price", "❌ Missing")
+                row_prices.append({
+                    "Section": sec_name,
+                    "Row": row_label,
+                    "Row Price": row_price
+                })
+
                 for seat in row["seats"].values():
                     if seat.get("status", "").lower() == "av":
                         pref, num = extract_row_and_number(seat.get("number", ""))
@@ -72,6 +82,13 @@ if uploaded_file:
                          value=", ".join(out_lines), height=200)
         else:
             st.info("No available seats found.")
+
+        # --------- show row prices ---------
+        if row_prices:
+            st.markdown("### 💷 Existing Row Prices")
+            st.dataframe(row_prices)
+        else:
+            st.info("No row-level prices found.")
 
         # ---------------- run updates -----------------
         if st.button("▶️ Go"):
@@ -101,7 +118,7 @@ if uploaded_file:
                 sec_key = sec.get("section_name", "").strip().lower()
                 if "rows" not in sec:
                     continue
-                for row in sec["rows"].values():
+                for row_label, row in sec["rows"].items():
                     for seat in row["seats"].values():
                         label = seat.get("number", "").strip()
                         norm = re.sub(r"\s*", "", label).lower()
@@ -120,7 +137,6 @@ if uploaded_file:
                                 seat["status"] = "uav"
                                 should_update = True
                         elif price_only_mode and price_value:
-                            # No seat range, just update everything
                             should_update = True
 
                         if should_update and price_value:
@@ -129,6 +145,7 @@ if uploaded_file:
                         if should_update:
                             updated_seats.append({
                                 "Section": sec.get("section_name", ""),
+                                "Row": row_label,
                                 "Seat": label,
                                 "Status": seat.get("status", ""),
                                 "Price": seat.get("price", "")
