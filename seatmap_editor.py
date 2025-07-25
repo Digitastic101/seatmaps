@@ -48,7 +48,6 @@ if uploaded_file:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
         st.success("✅ Seat map loaded successfully!")
 
-        # --------- build copy-paste list of available seats ---------
         row_map = {}
         for sec in seat_data.values():
             sec_name = sec.get("section_name", "Unknown Section")
@@ -62,26 +61,22 @@ if uploaded_file:
                             row_map.setdefault((sec_name, pref), []).append(num)
 
         out_lines = []
-        for (sec_name, pref), nums in sorted(row_map.items(),
-                                             key=lambda x: (x[0][0].lower(), sort_key(x[0][1]))):
+        for (sec_name, pref), nums in sorted(row_map.items(), key=lambda x: (x[0][0].lower(), sort_key(x[0][1]))):
             for s, e in compress_ranges(nums):
-                out_lines.append(f"{sec_name} {pref}{s}" if s == e
-                                 else f"{sec_name} {pref}{s}-{e}")
+                out_lines.append(f"{sec_name} {pref}{s}" if s == e else f"{sec_name} {pref}{s}-{e}")
 
         st.markdown("### 🪑 Copy-Paste Friendly Available Seat Ranges")
         if out_lines:
-            st.text_area("📋 Paste this into 'Enter seat ranges':",
-                         value=", ".join(out_lines), height=200)
+            st.text_area("📋 Paste this into 'Enter seat ranges':", value=", ".join(out_lines), height=200)
         else:
             st.info("No available seats found.")
 
-        # ---------------- run updates -----------------
         if st.button("▶️ Go"):
             price_value = price_input.strip() or None
             matched, requested, found, debug = [], set(), set(), []
             updated_seats = []
+            row_price_map = {}
 
-            # ---- parse seat_range_input (if any) ----
             if seat_range_input:
                 txt = seat_range_input
                 rx = re.compile(
@@ -100,12 +95,12 @@ if uploaded_file:
                         requested.add((sec, full))
                         debug.append((sec, full))
 
-            # ---- apply updates ----
             for sec in seat_data.values():
                 sec_key = sec.get("section_name", "").strip().lower()
                 if "rows" not in sec:
                     continue
-                for row in sec["rows"].values():
+                for row_key, row in sec["rows"].items():
+                    row_total_price = None
                     for seat in row["seats"].values():
                         label = seat.get("number", "").strip()
                         norm = re.sub(r"\s*", "", label).lower()
@@ -120,6 +115,8 @@ if uploaded_file:
                                 found.add(key)
                                 matched.append(f"{sec['section_name']} {label}")
                                 should_update = True
+                            else:
+                                seat["status"] = "uav"
                         elif price_only_mode and price_value:
                             should_update = True
 
@@ -136,10 +133,10 @@ if uploaded_file:
 
                     if price_value:
                         row["price"] = price_value
+                        row_price_map[f"{sec['section_name']} - {row_key}"] = price_value
                 if price_value:
                     sec["price"] = price_value
 
-            # ---- messaging ----
             if price_value:
                 st.success(f"💸 Prices updated to {price_value} on applicable seats, rows & sections.")
 
@@ -155,6 +152,10 @@ if uploaded_file:
                 st.dataframe(updated_seats)
             else:
                 st.info("No updated seat prices to display.")
+
+            if row_price_map:
+                st.markdown("### 📊 Row Price Summary")
+                st.dataframe([{"Row": k, "Price": v} for k, v in sorted(row_price_map.items())])
 
             st.download_button("Download Updated JSON",
                                json.dumps(seat_data, indent=2),
