@@ -48,21 +48,11 @@ if uploaded_file:
 
         # --------- build copy-paste list of available seats ---------
         row_map = {}
-        row_prices = []
-
         for sec in seat_data.values():
             sec_name = sec.get("section_name", "Unknown Section")
             if "rows" not in sec:
                 continue
-            for row_label, row in sec["rows"].items():
-                # Track row-level prices
-                row_price = row.get("price", "❌ Missing")
-                row_prices.append({
-                    "Section": sec_name,
-                    "Row": row_label,
-                    "Row Price": row_price
-                })
-
+            for row in sec["rows"].values():
                 for seat in row["seats"].values():
                     if seat.get("status", "").lower() == "av":
                         pref, num = extract_row_and_number(seat.get("number", ""))
@@ -83,18 +73,12 @@ if uploaded_file:
         else:
             st.info("No available seats found.")
 
-        # --------- show row prices ---------
-        if row_prices:
-            st.markdown("### 💷 Existing Row Prices")
-            st.dataframe(row_prices)
-        else:
-            st.info("No row-level prices found.")
-
         # ---------------- run updates -----------------
         if st.button("▶️ Go"):
             price_value = price_input.strip() or None
             matched, requested, found = [], set(), set()
             updated_seats = []
+            updated_rows = []
 
             # ---- parse seat_range_input (if any) ----
             if seat_range_input:
@@ -119,6 +103,7 @@ if uploaded_file:
                 if "rows" not in sec:
                     continue
                 for row_label, row in sec["rows"].items():
+                    row_was_updated = False
                     for seat in row["seats"].values():
                         label = seat.get("number", "").strip()
                         norm = re.sub(r"\s*", "", label).lower()
@@ -143,6 +128,7 @@ if uploaded_file:
                             seat["price"] = price_value
 
                         if should_update:
+                            row_was_updated = True
                             updated_seats.append({
                                 "Section": sec.get("section_name", ""),
                                 "Row": row_label,
@@ -151,8 +137,15 @@ if uploaded_file:
                                 "Price": seat.get("price", "")
                             })
 
-                    if price_value:
+                    # ✅ FIX: make sure row prices are updated in price-only mode too
+                    if price_value and (not seat_range_input or price_only_mode or row_was_updated):
                         row["price"] = price_value
+                        updated_rows.append({
+                            "Section": sec.get("section_name", ""),
+                            "Row": row_label,
+                            "New Row Price": price_value
+                        })
+
                 if price_value:
                     sec["price"] = price_value
 
@@ -167,14 +160,17 @@ if uploaded_file:
                 if missing:
                     st.warning("⚠️ Seats not found: " + ", ".join(f"{s.title()} {n}" for s, n in sorted(missing)))
 
-            # ---- show updated seat prices ----
             if updated_seats:
                 st.markdown("### 🎟️ Updated Seats with Prices")
                 st.dataframe(updated_seats)
-            else:
-                st.info("No updated seat prices to display.")
 
-            # ---- download ----
+            if updated_rows:
+                st.markdown("### 🧾 Updated Row Prices")
+                st.dataframe(updated_rows)
+
+            if not updated_seats and not updated_rows:
+                st.info("No seat or row prices were updated.")
+
             st.download_button("Download Updated JSON",
                                json.dumps(seat_data, indent=2),
                                file_name="updated_seatmap.json",
