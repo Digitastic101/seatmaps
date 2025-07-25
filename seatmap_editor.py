@@ -6,8 +6,8 @@ st.title("🎭 Seat Map Availability Editor")
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 seat_range_input = st.text_input(
-    "Enter seat ranges (e.g. Stalls C23-C28, Rausing Circle ROW 3 - 89-93)",
-    placeholder="Stalls C23-C28, Rausing Circle ROW 3 - 89-93"
+    "Enter seat ranges (e.g. AA1-AA5, BB2-BB4, C23-C28)",
+    placeholder="AA1-AA5, BB2-BB4, C23-C28"
 )
 
 price_input = st.text_input(
@@ -19,9 +19,6 @@ price_only_mode = st.checkbox("💸 Only update seat prices (leave availability 
 
 # ────────────────── helper functions ──────────────────
 def extract_row_and_number(label: str):
-    m = re.match(r"(ROW\s*\d+\s*-\s*)(\d+)", label.strip(), re.I)
-    if m:
-        return m.group(1).strip(), int(m.group(2))
     m = re.match(r"([A-Z]+)(\d+)", label.strip(), re.I)
     if m:
         return m.group(1).strip(), int(m.group(2))
@@ -39,6 +36,18 @@ def compress_ranges(nums):
 def sort_key(pref):
     m = re.search(r"(\d+)", pref)
     return (0, int(m.group(1))) if m else (1, pref.upper())
+
+def expand_seat_range_input(text):
+    requested = set()
+    pattern = re.compile(r"(?P<section>[A-Za-z0-9 ]+?)\s+(?P<start>[A-Z]+)(?P<from>\d+)(?:[-–to]+(?P<to>\d+))?", re.I)
+    for match in pattern.finditer(text):
+        sec = match.group("section").strip().lower()
+        prefix = match.group("start").strip().upper()
+        a = int(match.group("from"))
+        b = int(match.group("to") or a)
+        for n in range(a, b + 1):
+            requested.add((sec, f"{prefix}{n}".lower()))
+    return requested
 
 # ────────────────── main UI logic ─────────────────────
 if uploaded_file:
@@ -76,26 +85,12 @@ if uploaded_file:
         # ---------------- run updates -----------------
         if st.button("▶️ Go"):
             price_value = price_input.strip() or None
-            matched, requested, found = [], set(), set()
+            matched, found = [], set()
             updated_seats = []
             updated_rows = []
 
             # ---- parse seat_range_input (if any) ----
-            if seat_range_input:
-                txt = re.sub(r"\b([A-Za-z])\s+(\d+)\b", r"\1\2", seat_range_input)
-                txt = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1-\2", txt)
-                rx = re.compile(r"(?P<section>[A-Za-z0-9 ]+?)\s+"
-                                r"(?P<pref>(ROW\s*\d+\s*-\s*)|[A-Z]+)?"
-                                r"(?P<start>\d+)"
-                                r"(?:\s*(?:to|-)\s*)?"
-                                r"(?P<end>\d+)?", re.I)
-                for m in rx.finditer(txt):
-                    sec = m.group("section").strip().lower()
-                    pref = m.group("pref") or ""
-                    a, b = int(m.group("start")), int(m.group("end") or m.group("start"))
-                    for n in range(a, b + 1):
-                        full = f"{pref.strip()}{n}".strip()
-                        requested.add((sec, re.sub(r"\s*", "", full).lower()))
+            requested = expand_seat_range_input(seat_range_input) if seat_range_input else set()
 
             # ---- apply updates ----
             for sec in seat_data.values():
@@ -139,7 +134,7 @@ if uploaded_file:
 
                     if price_value and row_was_updated:
                         row["price"] = price_value
-                        row["row_price"] = price_value  # ✅ now correctly updates row_price
+                        row["row_price"] = price_value
                         updated_rows.append({
                             "Section": sec.get("section_name", ""),
                             "Row": row_label,
@@ -158,7 +153,7 @@ if uploaded_file:
                 st.write(", ".join(sorted(matched)) if matched else "No seat availability was changed.")
                 missing = requested - found
                 if missing:
-                    st.warning("⚠️ Seats not found: " + ", ".join(f"{s.title()} {n}" for s, n in sorted(missing)))
+                    st.warning("⚠️ Seats not found: " + ", ".join(f"{s.title()} {n.upper()}" for s, n in sorted(missing)))
 
             if updated_seats:
                 st.markdown("### 🎟️ Updated Seats with Prices")
