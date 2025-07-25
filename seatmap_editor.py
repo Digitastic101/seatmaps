@@ -102,9 +102,7 @@ if uploaded_file:
                 if price_value:
                     sec["price"] = price_value
                 for row_key, row in sec["rows"].items():
-                    if price_value:
-                        row["price"] = price_value
-                        row_price_map[f"{sec['section_name']} - {row_key}"] = price_value
+                    row_seats_updated = False
                     for seat in row["seats"].values():
                         label = seat.get("number", "").strip()
                         norm = re.sub(r"\s*", "", label).lower()
@@ -134,6 +132,11 @@ if uploaded_file:
                                 "Status": seat.get("status", ""),
                                 "Price": seat.get("price", "")
                             })
+                            row_seats_updated = True
+
+                    if price_value:
+                        row["price"] = price_value
+                        row_price_map[f"{sec['section_name']} - {row_key}"] = price_value
 
             if price_value:
                 st.success(f"💸 Prices updated to {price_value} across all applicable seats, rows & sections.")
