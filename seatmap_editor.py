@@ -17,14 +17,16 @@ price_input = st.text_input(
 
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
 
-# ────────────────── helper functions ──────────────────
+# ───────────────── helper functions ─────────────────
+
 def extract_row_and_number(label: str):
-    m = re.match(r"(ROW\s*\d+\s*-\s*)(\d+)", label.strip(), re.I)
-    if m:
-        return m.group(1).strip(), int(m.group(2))
-    m = re.match(r"([A-Z]+)(\d+)", label.strip(), re.I)
-    if m:
-        return m.group(1).strip(), int(m.group(2))
+    label = label.strip().lower().replace(" ", "")
+    row_match = re.match(r"(row\d+)-?(\d+)", label)
+    if row_match:
+        return row_match.group(1), int(row_match.group(2))
+    alpha_match = re.match(r"([a-z]{1,3})(\d+)", label)
+    if alpha_match:
+        return alpha_match.group(1), int(alpha_match.group(2))
     return None, None
 
 def compress_ranges(nums):
@@ -40,7 +42,7 @@ def sort_key(pref):
     m = re.search(r"(\d+)", pref)
     return (0, int(m.group(1))) if m else (1, pref.upper())
 
-# ────────────────── main UI logic ─────────────────────
+# ──────────────── main UI logic ────────────────
 if uploaded_file:
     try:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
@@ -81,20 +83,21 @@ if uploaded_file:
 
             # ---- parse seat_range_input (if any) ----
             if seat_range_input:
-                txt = re.sub(r"\b([A-Za-z])\s+(\d+)\b", r"\1\2", seat_range_input)
-                txt = re.sub(r"(\d+)\s*-\s*(\d+)", r"\1-\2", txt)
-                rx = re.compile(r"(?P<section>[A-Za-z0-9 ]+?)\s+"
-                                r"(?P<pref>(ROW\s*\d+\s*-\s*)|[A-Z]+)?"
-                                r"(?P<start>\d+)"
-                                r"(?:\s*(?:to|-)\s*)"
-                                r"(?P<end>\d+)?", re.I)
+                txt = seat_range_input
+                rx = re.compile(
+                    r"(?P<section>[A-Za-z0-9 ]+?)\s+"
+                    r"(?P<pref>(row\s*\d+\s*-\s*|[a-z]{1,3}))?"
+                    r"\s*(?P<start>\d+)"
+                    r"(?:\s*(?:to|–|-)\s*(?P<end>\d+))?",
+                    re.I
+                )
                 for m in rx.finditer(txt):
                     sec = m.group("section").strip().lower()
-                    pref = m.group("pref") or ""
+                    pref = (m.group("pref") or "").replace(" ", "").lower()
                     a, b = int(m.group("start")), int(m.group("end") or m.group("start"))
                     for n in range(a, b + 1):
-                        full = f"{pref.strip()}{n}".strip()
-                        requested.add((sec, re.sub(r"\s*", "", full).lower()))
+                        full = f"{pref}{n}".lower()
+                        requested.add((sec, full))
                         debug.append((sec, full))
 
             # ---- apply updates ----
@@ -118,7 +121,6 @@ if uploaded_file:
                                 matched.append(f"{sec['section_name']} {label}")
                                 should_update = True
                         elif price_only_mode and price_value:
-                            # No seat range, just update everything
                             should_update = True
 
                         if should_update and price_value:
@@ -148,14 +150,12 @@ if uploaded_file:
                 if missing:
                     st.warning("⚠️ Seats not found: " + ", ".join(f"{s.title()} {n}" for s, n in sorted(missing)))
 
-            # ---- show updated seat prices ----
             if updated_seats:
                 st.markdown("### 🎟️ Updated Seats with Prices")
                 st.dataframe(updated_seats)
             else:
                 st.info("No updated seat prices to display.")
 
-            # ---- download ----
             st.download_button("Download Updated JSON",
                                json.dumps(seat_data, indent=2),
                                file_name="updated_seatmap.json",
