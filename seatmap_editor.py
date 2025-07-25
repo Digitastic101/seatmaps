@@ -6,8 +6,8 @@ st.title("🎭 Seat Map Availability Editor")
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 seat_range_input = st.text_input(
-    "Enter seat ranges (e.g. AA1-AA5, BB2-BB4, C23-C28)",
-    placeholder="AA1-AA5, BB2-BB4, C23-C28"
+    "Enter seat ranges (e.g. AA1-AA5, Rausing Circle ROW 3 - 89-93)",
+    placeholder="e.g. Stalls AA1-AA5, Rausing Circle ROW 3 - 89-93"
 )
 
 price_input = st.text_input(
@@ -17,7 +17,7 @@ price_input = st.text_input(
 
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
 
-# ────────────────── helper functions ──────────────────
+# ──────────────── helper functions ────────────────
 def extract_row_and_number(label: str):
     m = re.match(r"([A-Z]+)(\d+)", label.strip(), re.I)
     if m:
@@ -39,23 +39,49 @@ def sort_key(pref):
 
 def expand_seat_range_input(text):
     requested = set()
-    pattern = re.compile(r"(?P<section>[A-Za-z0-9 ]+?)\s+(?P<start>[A-Z]+)(?P<from>\d+)(?:[-–to]+(?P<to>\d+))?", re.I)
+
+    pattern = re.compile(
+        r"(?P<section>[A-Za-z0-9 ]+?)\s+"
+        r"(?:(?P<rowprefix>ROW\s*\d+)\s*-\s*)?"
+        r"(?P<start>[A-Z]*\d+)"
+        r"(?:\s*[-to]+\s*(?P<end>[A-Z]*\d+))?",
+        re.IGNORECASE
+    )
+
     for match in pattern.finditer(text):
-        sec = match.group("section").strip().lower()
-        prefix = match.group("start").strip().upper()
-        a = int(match.group("from"))
-        b = int(match.group("to") or a)
-        for n in range(a, b + 1):
-            requested.add((sec, f"{prefix}{n}".lower()))
+        section = match.group("section").strip().lower()
+        rowprefix = match.group("rowprefix")
+        start = match.group("start").upper()
+        end = match.group("end").upper() if match.group("end") else start
+
+        def extract_parts(label):
+            m = re.match(r"([A-Z]+)?(\d+)", label)
+            return (m.group(1) or "", int(m.group(2))) if m else ("", 0)
+
+        start_pref, start_num = extract_parts(start)
+        end_pref, end_num = extract_parts(end)
+
+        if rowprefix:
+            row_pref = rowprefix.strip().upper() + " - "
+            for n in range(start_num, end_num + 1):
+                full = f"{row_pref}{n}".strip().lower().replace(" ", "")
+                requested.add((section, full))
+        else:
+            if start_pref != end_pref:
+                continue  # skip malformed mixed prefixes
+            for n in range(start_num, end_num + 1):
+                full = f"{start_pref}{n}".strip().lower()
+                requested.add((section, full))
+
     return requested
 
-# ────────────────── main UI logic ─────────────────────
+# ──────────────── main logic ────────────────
 if uploaded_file:
     try:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
         st.success("✅ Seat map loaded successfully!")
 
-        # --------- build copy-paste list of available seats ---------
+        # Generate list of current AV seats for copy/paste
         row_map = {}
         for sec in seat_data.values():
             sec_name = sec.get("section_name", "Unknown Section")
@@ -82,17 +108,16 @@ if uploaded_file:
         else:
             st.info("No available seats found.")
 
-        # ---------------- run updates -----------------
+        # ---------------- Run updates -----------------
         if st.button("▶️ Go"):
             price_value = price_input.strip() or None
             matched, found = [], set()
             updated_seats = []
             updated_rows = []
 
-            # ---- parse seat_range_input (if any) ----
+            # Parse seat range
             requested = expand_seat_range_input(seat_range_input) if seat_range_input else set()
 
-            # ---- apply updates ----
             for sec in seat_data.values():
                 sec_key = sec.get("section_name", "").strip().lower()
                 if "rows" not in sec:
@@ -144,7 +169,7 @@ if uploaded_file:
                 if price_value:
                     sec["price"] = price_value
 
-            # ---- messaging ----
+            # Output updates
             if price_value:
                 st.success(f"💸 Prices updated to {price_value} on applicable seats, rows & sections.")
 
