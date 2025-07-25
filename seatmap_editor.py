@@ -102,7 +102,6 @@ if uploaded_file:
                 if price_value and price_only_mode:
                     sec["price"] = price_value
                 for row_key, row in sec["rows"].items():
-                    row_seats_updated = False
                     if price_value and price_only_mode:
                         row["price"] = price_value
                         row_price_map[f"{sec['section_name']} - {row_key}"] = price_value
@@ -135,7 +134,6 @@ if uploaded_file:
                                 "Status": seat.get("status", ""),
                                 "Price": seat.get("price", "")
                             })
-                            row_seats_updated = True
 
             if price_value and price_only_mode:
                 st.success(f"💸 Prices updated to {price_value} across all seats, rows & sections.")
