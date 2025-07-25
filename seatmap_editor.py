@@ -17,14 +17,20 @@ price_input = st.text_input(
 
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
 
-# Helper functions
-def normalise_key(section, label):
-    return (section.strip().lower(), re.sub(r"\s*", "", label).lower())
+# ───────────────────── Helpers ─────────────────────
 
-def extract_requested_seats(text):
+def normalize_key(section, label):
+    return (
+        section.strip().lower(),
+        re.sub(r"\s+", "", label.strip().lower())
+    )
+
+def parse_requested_seats(text):
     requested = set()
+    # Normalize: "AA 14" → "AA14"
     text = re.sub(r"([A-Z]{1,3})\s+(\d+)", r"\1\2", text, flags=re.I)
 
+    # Match each seat or range
     pattern = re.compile(
         r"(?P<section>[A-Za-z0-9 ]+?)\s+"
         r"(?P<start>[A-Z]*\d+)"
@@ -41,13 +47,13 @@ def extract_requested_seats(text):
             m = re.match(r"([A-Z]+)(\d+)", label)
             return (m.group(1), int(m.group(2))) if m else ("", 0)
 
-        start_pref, start_num = parts(start)
-        end_pref, end_num = parts(end)
-        if start_pref != end_pref:
-            continue
+        sp, sn = parts(start)
+        ep, en = parts(end)
+        if sp != ep:
+            continue  # Skip mixed prefix ranges
 
-        for n in range(start_num, end_num + 1):
-            seat_id = f"{start_pref}{n}"
+        for num in range(sn, en + 1):
+            seat_id = f"{sp}{num}"
             requested.add((section, seat_id.lower()))
     return requested
 
@@ -64,7 +70,8 @@ def sort_key(pref):
     m = re.search(r"(\d+)", pref)
     return (0, int(m.group(1))) if m else (1, pref.upper())
 
-# ────────── MAIN ──────────
+# ───────────────────── Main Logic ─────────────────────
+
 if uploaded_file:
     try:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
@@ -90,53 +97,47 @@ if uploaded_file:
 
         if out_lines:
             st.markdown("### 🪑 Currently Available Seats")
-            st.text_area("Copy this if you want to paste back in:", value=", ".join(out_lines), height=150)
+            st.text_area("Copy this for reuse:", value=", ".join(out_lines), height=150)
         else:
-            st.info("No available seats found.")
+            st.info("No currently available seats.")
 
-        # GO BUTTON
+        # ────────── GO BUTTON ──────────
         if st.button("▶️ Go"):
             price_value = price_input.strip() or None
-            requested = extract_requested_seats(seat_range_input) if seat_range_input else set()
-            updated_seats, updated_rows, found = [], [], set()
+            requested = parse_requested_seats(seat_range_input)
+            found = set()
+            updated_seats, updated_rows = [], []
 
             for sec in seat_data.values():
                 sec_name = sec.get("section_name", "")
                 sec_key = sec_name.strip().lower()
-
                 if "rows" not in sec:
                     continue
 
                 for row_label, row in sec["rows"].items():
                     row_changed = False
                     for seat in row.get("seats", {}).values():
-                        label = seat.get("number", "").strip()
-                        seat_key = normalise_key(sec_name, label)
-
+                        seat_label = seat.get("number", "")
+                        seat_key = normalize_key(sec_name, seat_label)
                         is_target = seat_key in requested
-                        should_update = False
 
                         if not price_only_mode:
                             seat["status"] = "av" if is_target else "uav"
-                            should_update = True
-                        elif is_target:
-                            should_update = True
+                        if is_target:
+                            found.add(seat_key)
 
-                        if should_update and price_value:
+                        if price_value and (not price_only_mode or is_target):
                             seat["price"] = price_value
                             row_changed = True
 
-                        if should_update:
+                        if is_target or price_value:
                             updated_seats.append({
                                 "Section": sec_name,
                                 "Row": row_label,
-                                "Seat": label,
+                                "Seat": seat_label,
                                 "Status": seat.get("status", ""),
                                 "Price": seat.get("price", "")
                             })
-
-                        if is_target:
-                            found.add(seat_key)
 
                     if price_value and row_changed:
                         row["price"] = price_value
@@ -150,25 +151,21 @@ if uploaded_file:
                 if price_value:
                     sec["price"] = price_value
 
-            # Results
+            # ────────── Output Results ──────────
             if price_value:
-                st.success(f"💸 Prices updated to {price_value}")
+                st.success(f"💸 Price set to {price_value} on matching seats/rows.")
 
             if updated_seats:
                 st.markdown("### 🎟️ Updated Seats")
                 st.dataframe(updated_seats)
 
             if updated_rows:
-                st.markdown("### 🧾 Updated Row Prices")
+                st.markdown("### 🧾 Updated Rows")
                 st.dataframe(updated_rows)
 
-            if requested:
-                not_found = requested - found
-                if not_found:
-                    st.warning("⚠️ Some seats were not found: " + ", ".join(f"{s.title()} {n.upper()}" for s, n in sorted(not_found)))
-
-            if not updated_seats and not updated_rows:
-                st.info("No seats or rows were updated.")
+            not_found = requested - found
+            if not_found:
+                st.warning("⚠️ Some seats were not found: " + ", ".join(f"{s.title()} {n.upper()}" for s, n in sorted(not_found)))
 
             st.download_button("⬇️ Download Updated JSON",
                                data=json.dumps(seat_data, indent=2),
@@ -176,4 +173,4 @@ if uploaded_file:
                                mime="application/json")
 
     except Exception as e:
-        st.error(f"❌ Error: {e}")
+        st.error(f"❌ Error reading file: {e}")
