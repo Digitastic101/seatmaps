@@ -99,12 +99,10 @@ if uploaded_file:
                 sec_key = sec.get("section_name", "").strip().lower()
                 if "rows" not in sec:
                     continue
-                if price_value and price_only_mode:
+                if price_value:
                     sec["price"] = price_value
                 for row_key, row in sec["rows"].items():
-                    if price_value and price_only_mode:
-                        row["price"] = price_value
-                        row_price_map[f"{sec['section_name']} - {row_key}"] = price_value
+                    row_updated = False
                     for seat in row["seats"].values():
                         label = seat.get("number", "").strip()
                         norm = re.sub(r"\s*", "", label).lower()
@@ -124,7 +122,7 @@ if uploaded_file:
                         elif price_only_mode and price_value:
                             should_update = True
 
-                        if price_value and price_only_mode:
+                        if price_value:
                             seat["price"] = price_value
 
                         if should_update:
@@ -134,9 +132,16 @@ if uploaded_file:
                                 "Status": seat.get("status", ""),
                                 "Price": seat.get("price", "")
                             })
+                            row_updated = True
 
-            if price_value and price_only_mode:
-                st.success(f"💸 Prices updated to {price_value} across all seats, rows & sections.")
+                    if row_updated or price_only_mode:
+                        if price_value:
+                            row["price"] = price_value
+                            row["row_price"] = price_value
+                            row_price_map[f"{sec['section_name']} - {row_key}"] = price_value
+
+            if price_value:
+                st.success(f"💸 Prices updated to {price_value} across all matching seats, rows & sections.")
 
             if not price_only_mode and seat_range_input:
                 st.markdown("### ✅ Availability Updated")
