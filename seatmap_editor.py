@@ -121,7 +121,7 @@ if uploaded_file:
                             elif not price_only_mode:
                                 seat["status"] = "uav"
                                 should_update = True
-                        elif price_only_mode and price_value:
+                        elif price_value:
                             should_update = True
 
                         if should_update and price_value:
@@ -137,9 +137,9 @@ if uploaded_file:
                                 "Price": seat.get("price", "")
                             })
 
-                    # ✅ FIX: make sure row prices are updated in price-only mode too
-                    if price_value and (not seat_range_input or price_only_mode or row_was_updated):
+                    if price_value and row_was_updated:
                         row["price"] = price_value
+                        row["row_price"] = price_value  # ✅ now correctly updates row_price
                         updated_rows.append({
                             "Section": sec.get("section_name", ""),
                             "Row": row_label,
