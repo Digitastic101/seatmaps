@@ -5,9 +5,9 @@ st.title("🎭 Seat Map Availability Editor")
 
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
-seat_range_input = st.text_input(
-    "Enter seat ranges (e.g. AA1-AA5, Rausing Circle ROW 3 - 89-93)",
-    placeholder="e.g. Stalls AA1-AA5, Rausing Circle ROW 3 - 89-93"
+seat_range_input = st.text_area(
+    "Enter seat ranges (e.g. Dress Circle B 1-4, Dress Circle AA 14-15)",
+    placeholder="Dress Circle B 1-4, Dress Circle AA 14-15"
 )
 
 price_input = st.text_input(
@@ -39,6 +39,9 @@ def sort_key(pref):
 
 def expand_seat_range_input(text):
     requested = set()
+
+    # Fix things like "AA 14" → "AA14", "BB 5" → "BB5"
+    text = re.sub(r"([A-Z]{1,3})\s+(\d+)", r"\1\2", text, flags=re.I)
 
     pattern = re.compile(
         r"(?P<section>[A-Za-z0-9 ]+?)\s+"
@@ -115,7 +118,6 @@ if uploaded_file:
             updated_seats = []
             updated_rows = []
 
-            # Parse seat range
             requested = expand_seat_range_input(seat_range_input) if seat_range_input else set()
 
             for sec in seat_data.values():
