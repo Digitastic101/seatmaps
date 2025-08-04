@@ -179,7 +179,7 @@ if uploaded_file:
             st.download_button(
                 "Download Updated JSON",
                 json.dumps(seat_data, indent=2),
-                file_name="seatmap_with_seats_on.json",
+                file_name="updated_seatmap.json",
                 mime="application/json"
             )
 
