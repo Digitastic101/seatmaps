@@ -48,6 +48,7 @@ if uploaded_file:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
         st.success("✅ Seat map loaded successfully!")
 
+        # Build a map of currently available seats for quick copy
         row_map = {}
         for sec in seat_data.values():
             sec_name = sec.get("section_name", "Unknown Section")
@@ -77,6 +78,7 @@ if uploaded_file:
             updated_seats = []
             row_price_map = {}
 
+            # ── Parse target ranges from user input ──
             if seat_range_input:
                 txt = seat_range_input
                 rx = re.compile(
@@ -95,35 +97,47 @@ if uploaded_file:
                         requested.add((sec, full))
                         debug.append((sec, full))
 
+            # ── Walk the structure and apply updates ──
             for sec in seat_data.values():
                 sec_key = sec.get("section_name", "").strip().lower()
                 if "rows" not in sec:
                     continue
+
+                # Optional: section-level price
                 if price_value:
                     sec["price"] = price_value
+
                 for row_key, row in sec["rows"].items():
                     row_updated = False
+
                     for seat in row["seats"].values():
                         label = seat.get("number", "").strip()
                         norm = re.sub(r"\s*", "", label).lower()
                         key = (sec_key, norm)
 
                         should_update = False
+                        current_status = seat.get("status", "").strip().lower()
 
-                        if seat_range_input:
+                        # Availability updates (only if not in price-only mode)
+                        if seat_range_input and not price_only_mode:
                             if key in requested:
-                                if not price_only_mode:
-                                    seat["status"] = "av"
+                                # Ensure ON
                                 found.add(key)
                                 matched.append(f"{sec['section_name']} {label}")
-                                should_update = True
+                                if current_status != "av":
+                                    seat["status"] = "av"
+                                    should_update = True
                             else:
-                                seat["status"] = "uav"
-                        elif price_only_mode and price_value:
-                            should_update = True
+                                # Only turn OFF if currently ON
+                                if current_status == "av":
+                                    seat["status"] = "uav"
+                                    should_update = True
 
+                        # Price updates (independent of availability)
                         if price_value:
-                            seat["price"] = price_value
+                            if seat.get("price") != price_value:
+                                seat["price"] = price_value
+                                should_update = True
 
                         if should_update:
                             updated_seats.append({
@@ -134,12 +148,14 @@ if uploaded_file:
                             })
                             row_updated = True
 
+                    # Row-level price propagation if anything changed or in price-only mode
                     if row_updated or price_only_mode:
                         if price_value:
                             row["price"] = price_value
                             row["row_price"] = price_value
                             row_price_map[f"{sec['section_name']} - {row_key}"] = price_value
 
+            # ── UI feedback ──
             if price_value:
                 st.success(f"💸 Prices updated to {price_value} across all matching seats, rows & sections.")
 
@@ -160,10 +176,12 @@ if uploaded_file:
                 st.markdown("### 📊 Row Price Summary")
                 st.dataframe([{"Row": k, "Price": v} for k, v in sorted(row_price_map.items())])
 
-            st.download_button("Download Updated JSON",
-                               json.dumps(seat_data, indent=2),
-                               file_name="updated_seatmap.json",
-                               mime="application/json")
+            st.download_button(
+                "Download Updated JSON",
+                json.dumps(seat_data, indent=2),
+                file_name="seatmap_with_seats_on.json",
+                mime="application/json"
+            )
 
             if seat_range_input:
                 st.markdown("### 🔍 Parsed Seat Targets")
