@@ -19,14 +19,32 @@ price_only_mode = st.checkbox("💸 Only update seat prices (leave availability 
 
 # ───────────────── helper functions ─────────────────
 
+# Remove any (…) parts before comparing labels (e.g. "(VIP) C12" -> "C12")
+BRACKET_RX = re.compile(r"(\([^)]*\))")
+
+def strip_brackets(s: str) -> str:
+    return BRACKET_RX.sub("", s or "").strip()
+
 def extract_row_and_number(label: str):
+    """
+    Returns a tuple (prefix, number) where:
+      - prefix is either 'row<digits>' or 1–3 alpha letters (lowercased, no spaces)
+      - number is an int
+    Bracketed parts in the label are ignored for parsing.
+    """
+    label = strip_brackets(label)
     label = label.strip().lower().replace(" ", "")
+
+    # ROW-style like "row3-23" or "row3 23" or "row3_23" etc.: we accept optional dash
     row_match = re.match(r"(row\d+)-?(\d+)", label)
     if row_match:
         return row_match.group(1), int(row_match.group(2))
+
+    # Alpha style like "c23", "aa17"
     alpha_match = re.match(r"([a-z]{1,3})(\d+)", label)
     if alpha_match:
         return alpha_match.group(1), int(alpha_match.group(2))
+
     return None, None
 
 def compress_ranges(nums):
@@ -41,6 +59,18 @@ def compress_ranges(nums):
 def sort_key(pref):
     m = re.search(r"(\d+)", pref)
     return (0, int(m.group(1))) if m else (1, pref.upper())
+
+def display_prefix(pref: str) -> str:
+    """
+    Convert internal prefix ('row3' or 'c') into display form expected by the parser.
+    - 'row3' -> 'ROW 3 - '  (note trailing ' - ')
+    - 'c'    -> 'C'
+    """
+    if pref.startswith("row"):
+        m = re.match(r"row(\d+)", pref)
+        if m:
+            return f"ROW {m.group(1)} - "
+    return pref.upper()
 
 # ──────────────── main UI logic ────────────────
 if uploaded_file:
@@ -58,13 +88,23 @@ if uploaded_file:
                 for seat in row["seats"].values():
                     if seat.get("status", "").lower() == "av":
                         pref, num = extract_row_and_number(seat.get("number", ""))
-                        if pref and num:
+                        if pref and num is not None:
                             row_map.setdefault((sec_name, pref), []).append(num)
 
         out_lines = []
         for (sec_name, pref), nums in sorted(row_map.items(), key=lambda x: (x[0][0].lower(), sort_key(x[0][1]))):
             for s, e in compress_ranges(nums):
-                out_lines.append(f"{sec_name} {pref}{s}" if s == e else f"{sec_name} {pref}{s}-{e}")
+                disp_pref = display_prefix(pref)
+                if pref.startswith("row"):
+                    # For ROW-style we produce: "<Section> ROW <n> - <start>-<end>"
+                    out_lines.append(
+                        f"{sec_name} {disp_pref}{s}" if s == e else f"{sec_name} {disp_pref}{s}-{e}"
+                    )
+                else:
+                    # For alpha prefix we produce: "<Section> C<start>-<end>"
+                    out_lines.append(
+                        f"{sec_name} {disp_pref}{s}" if s == e else f"{sec_name} {disp_pref}{s}-{e}"
+                    )
 
         st.markdown("### 🪑 Copy-Paste Friendly Available Seat Ranges")
         if out_lines:
@@ -89,8 +129,12 @@ if uploaded_file:
                     re.I
                 )
                 for m in rx.finditer(txt):
-                    sec = m.group("section").strip().lower()
-                    pref = (m.group("pref") or "").replace(" ", "").lower()
+                    sec = (m.group("section") or "").strip().lower()
+
+                    # Clean the prefix from brackets & spaces, then lowercase for matching
+                    raw_pref = m.group("pref") or ""
+                    pref = re.sub(r"\s*", "", strip_brackets(raw_pref)).lower()
+
                     a, b = int(m.group("start")), int(m.group("end") or m.group("start"))
                     for n in range(a, b + 1):
                         full = f"{pref}{n}".lower()
@@ -111,7 +155,9 @@ if uploaded_file:
                     row_updated = False
 
                     for seat in row["seats"].values():
-                        label = seat.get("number", "").strip()
+                        label_raw = seat.get("number", "")
+                        # Ignore everything in brackets for comparisons
+                        label = strip_brackets(label_raw)
                         norm = re.sub(r"\s*", "", label).lower()
                         key = (sec_key, norm)
 
@@ -123,7 +169,7 @@ if uploaded_file:
                             if key in requested:
                                 # Ensure ON
                                 found.add(key)
-                                matched.append(f"{sec['section_name']} {label}")
+                                matched.append(f"{sec.get('section_name','')} {label_raw.strip()}")
                                 if current_status != "av":
                                     seat["status"] = "av"
                                     should_update = True
@@ -142,7 +188,7 @@ if uploaded_file:
                         if should_update:
                             updated_seats.append({
                                 "Section": sec.get("section_name", ""),
-                                "Seat": label,
+                                "Seat": label_raw.strip(),
                                 "Status": seat.get("status", ""),
                                 "Price": seat.get("price", "")
                             })
@@ -153,7 +199,7 @@ if uploaded_file:
                         if price_value:
                             row["price"] = price_value
                             row["row_price"] = price_value
-                            row_price_map[f"{sec['section_name']} - {row_key}"] = price_value
+                            row_price_map[f"{sec.get('section_name','')} - {row_key}"] = price_value
 
             # ── UI feedback ──
             if price_value:
