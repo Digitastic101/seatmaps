@@ -6,7 +6,7 @@ st.title("🎭 Seat Map Availability Editor")
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 seat_range_input = st.text_input(
-    "Enter seat ranges (e.g. Stalls C23-C28, Rausing Circle ROW 3 - 89-93)",
+    "Enter seat ranges (e.g. Platform 1 E8-14, Platform 1 F8-19, Platform 1 G11-21)",
     placeholder="Platform 1 E8-14, Platform 1 F8-19, Platform 1 G11-21"
 )
 
@@ -16,7 +16,6 @@ price_input = st.text_input(
 )
 
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
-dont_switch_off = st.checkbox("🚫 Don’t switch off other seats (only turn listed seats to AV)")
 
 # ───────────────── helper functions ─────────────────
 
@@ -69,8 +68,6 @@ def parse_input_ranges(user_text: str, section_names):
     # Map lowercase section_name -> canonical (for display) and also for quick matching
     canon_sections = {s.lower(): s for s in section_names if s}
 
-    # To find the section in each chunk, try longest matching section name at the start
-    # Example chunk: "Platform 1 E8-14"
     chunks = [c.strip() for c in re.split(r"\s*,\s*", user_text) if c.strip()]
     for chunk in chunks:
         # Find section by longest prefix match (case-insensitive)
@@ -78,26 +75,20 @@ def parse_input_ranges(user_text: str, section_names):
         chunk_low = chunk.lower()
         for low_name, canon in sorted(canon_sections.items(), key=lambda x: len(x[0]), reverse=True):
             if chunk_low.startswith(low_name):
-                # Ensure either exact or followed by whitespace
                 after = chunk_low[len(low_name):]
                 if after == "" or after[0].isspace():
                     sec_match = (low_name, canon)
                     break
         if not sec_match:
-            # If no section prefix, skip this chunk
             continue
 
         sec_low, sec_canon = sec_match
-        rest = chunk[len(sec_canon):].strip()  # take the tail after the section
+        rest = chunk[len(sec_canon):].strip()
 
-        # Accept multiple ranges in the same chunk tail (e.g., "E8-14 F8-19")
-        # Patterns:
-        #   1) ROW-style: "ROW 3 - 21-30" or "row3-21-30"
-        #   2) Alpha+num: "E8-14" / "AA10-22" / "G11-21"
         rx = re.compile(
-            r"(?:(row)\s*(\d+)\s*-\s*(\d+)\s*(?:to|–|-)\s*(\d+))"     # ROW X - a-b
-            r"|(?:(row)\s*(\d+)\s*-\s*(\d+))"                         # ROW X - a (single)
-            r"|([a-z]{1,3})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?",    # E 8-14  / AA10-22 / G11-21
+            r"(?:(row)\s*(\d+)\s*-\s*(\d+)\s*(?:to|–|-)\s*(\d+))"
+            r"|(?:(row)\s*(\d+)\s*-\s*(\d+))"
+            r"|([a-z]{1,3})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?",
             re.I
         )
 
@@ -132,7 +123,7 @@ if uploaded_file:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
         st.success("✅ Seat map loaded successfully!")
 
-        # Build: available seats per (section_name, prefix)
+        # Build available seats map
         row_map = {}
         available_count = 0
         for sec in seat_data.values():
@@ -144,7 +135,6 @@ if uploaded_file:
                     if seat.get("status","").lower() == "av":
                         available_count += 1
                         label = norm_label(seat.get("number",""))
-                        # Split into prefix letters and number if possible
                         m = re.match(r"([a-z]{1,3})(\d+)", label)
                         if not m:
                             continue
@@ -170,7 +160,7 @@ if uploaded_file:
         else:
             st.info("No available seats found.")
 
-        # Preview what the input will target
+        # Preview parsed seats
         if seat_range_input:
             section_names = section_names_from_data(seat_data)
             requested, debug_list = parse_input_ranges(seat_range_input, section_names)
@@ -181,59 +171,47 @@ if uploaded_file:
 
         if st.button("▶️ Go"):
             price_value = price_input.strip() or None
-            matched, requested, found, debug = [], set(), set(), []
+            matched, found = [], set()
             updated_seats = []
             row_price_map = {}
 
-            # Build requested set using the robust parser
             section_names = section_names_from_data(seat_data)
             requested, debug_rows = parse_input_ranges(seat_range_input, section_names)
-            debug = debug_rows  # keep for UI
 
-            # ── Walk the structure and apply updates ──
+            # Apply updates
             for sec in seat_data.values():
-                sec_key = (sec.get("section_name","").strip().lower())
+                sec_key = sec.get("section_name","").strip().lower()
                 if "rows" not in sec:
                     continue
 
-                # Optional: section-level price
                 if price_value:
                     sec["price"] = price_value
 
                 for row_key, row in sec["rows"].items():
                     row_updated = False
-
                     for seat in row["seats"].values():
                         label_raw = seat.get("number","")
                         norm = norm_label(label_raw)
-
-                        # also accept ROW-style normalisation for row N + number
-                        alt = None
                         mrow = re.match(r"([a-z]{1,3})(\d+)", norm)
-                        if mrow:
-                            alt = norm  # 'e12' etc.
-                        # Build keys to check
-                        key_alpha = (sec_key, alt) if alt else None
-
+                        key_alpha = (sec_key, norm) if mrow else None
                         should_update = False
                         current_status = seat.get("status", "").strip().lower()
 
-                        # Availability updates (only if not in price-only mode)
+                        # Availability updates (skip if price-only)
                         if seat_range_input and not price_only_mode:
-                            hit = (key_alpha in requested) if key_alpha else False
-                            if hit:
-                                # Turn ON
+                            if key_alpha in requested:
                                 found.add(key_alpha)
                                 matched.append(f"{sec.get('section_name','')} {label_raw.strip()}")
                                 if current_status != "av":
                                     seat["status"] = "av"
                                     should_update = True
                             else:
-                                if not dont_switch_off and current_status == "av":
+                                # Default: turn OFF all others if AV
+                                if current_status == "av":
                                     seat["status"] = "uav"
                                     should_update = True
 
-                        # Price updates (independent of availability)
+                        # Price updates
                         if price_value and seat.get("price") != price_value:
                             seat["price"] = price_value
                             should_update = True
@@ -247,25 +225,21 @@ if uploaded_file:
                             })
                             row_updated = True
 
-                    # Row-level price propagation
                     if (row_updated or price_only_mode) and price_value:
                         row["price"] = price_value
                         row["row_price"] = price_value
                         row_price_map[f"{sec.get('section_name','')} - {row_key}"] = price_value
 
-            # ── UI feedback ──
+            # UI feedback
             if price_value:
                 st.success(f"💸 Prices updated to {price_value} across all matching seats, rows & sections.")
 
             if not price_only_mode and seat_range_input:
                 st.markdown("### ✅ Availability Updated")
                 st.write(", ".join(sorted(matched)) if matched else "No seat availability was changed.")
-                # Derive human-readable missing list
                 missing = {k for k in requested if k not in found}
                 if missing:
-                    pretty = []
-                    for sec_low, seat_norm in sorted(missing):
-                        pretty.append(f"{sec_low.title()} {seat_norm.upper()}")
+                    pretty = [f"{sec.title()} {seat.upper()}" for sec, seat in sorted(missing)]
                     st.warning("⚠️ Seats not found: " + ", ".join(pretty))
 
             if updated_seats:
@@ -284,10 +258,6 @@ if uploaded_file:
                 file_name="updated_seatmap.json",
                 mime="application/json"
             )
-
-            if seat_range_input:
-                st.markdown("### 🔍 Parsed Seat Targets (after run)")
-                st.table(debug)
 
     except Exception as e:
         st.error(f"❌ Error reading file: {e}")
