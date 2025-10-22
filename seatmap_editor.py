@@ -40,30 +40,32 @@ def display_prefix(pref: str) -> str:
             return f"ROW {m.group(1)} - "
     return pref.upper()
 
+# ✅ Fixed normalisation to handle Row 1 formatting quirks
 def norm_label(s: str) -> str:
-    """Normalise seat labels (handles 'Row 2 Seat 34' and other variations)."""
-    s = strip_brackets(s)
-    s = s.lower().replace("seat", "")       # new fix: remove 'seat'
-    s = re.sub(r"\s+", "", s)
+    """Normalise seat labels (handles Row 1 Seat 157, Row1-157, Row01-157, etc)."""
+    s = strip_brackets(s or "")
+    s = s.lower().replace("seat", "")
+    s = re.sub(r"\s*-\s*", "-", s)          # normalise hyphen spacing
+    s = re.sub(r"\s+", "", s)               # remove stray spaces
+    s = re.sub(r"row0?(\d+)", r"row\1", s)  # drop any leading zero
     return s
 
+# ✅ More flexible split
 def split_norm_label(norm: str):
-    """
-    Returns (prefix, num) or None.
-    Handles: 'row2-34', 'row 2-34', 'row2seat34', 'r2-34', etc.
-    """
+    """Split a normalised label into (prefix, number) for both row and alpha formats."""
     norm = norm.replace("seat", "")
-    # ROW-type formats
-    m = re.match(r"(row\d+)[\s\-]?(\d+)$", norm)
+    # match row-number-seat style
+    m = re.match(r"(row\d+)[\-]?(\d+)$", norm)
     if m:
         return m.group(1), int(m.group(2))
-    # alphabetic prefix formats like G11-21
+    # fallback for alpha/word prefixes like G11, main-left15, etc.
     m = re.match(r"([a-z][a-z\-]{0,19})(\d+)$", norm)
     if m:
         return m.group(1), int(m.group(2))
     return None
 
 def section_names_from_data(seat_data):
+    """Return normalised section names (trim extra spaces)."""
     return [re.sub(r"\s+", " ", sec.get("section_name", "").strip()) 
             for sec in seat_data.values()
             if isinstance(sec, dict) and sec.get("section_name")]
@@ -84,9 +86,9 @@ def parse_input_ranges(user_text: str, section_names):
     chunks = [c.strip() for c in re.split(r"\s*,\s*", user_text) if c.strip()]
 
     rx = re.compile(
-        r"(?:(row)\s*(\d+)\s*[-–]?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"   # 'ROW 3 - 21-30'
-        r"|(?:(row)\s*(\d+)\s*[-–]?\s*(\d+))"                       # 'ROW 3 - 21'
-        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?", # 'G11-21'
+        r"(?:(row)\s*(\d+)\s*[-–]?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"
+        r"|(?:(row)\s*(\d+)\s*[-–]?\s*(\d+))"
+        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?",
         re.I
     )
 
@@ -109,8 +111,7 @@ def parse_input_ranges(user_text: str, section_names):
             if m.group(1):  # ROW X - a-b
                 rownum = int(m.group(2))
                 start, end = int(m.group(3)), int(m.group(4))
-                a, b = sorted((start, end))
-                for n in range(a, b + 1):
+                for n in range(min(start, end), max(start, end) + 1):
                     key = (sec_low, f"row{rownum}-{n}")
                     requested.add(key)
                     debug_rows.append((sec_canon, key[1]))
@@ -124,8 +125,7 @@ def parse_input_ranges(user_text: str, section_names):
                 pref = m.group(8).lower()
                 a = int(m.group(9))
                 b = int(m.group(10) or m.group(9))
-                lo, hi = sorted((a, b))
-                for n in range(lo, hi + 1):
+                for n in range(min(a, b), max(a, b) + 1):
                     key = (sec_low, f"{pref}{n}")
                     requested.add(key)
                     debug_rows.append((sec_canon, key[1]))
