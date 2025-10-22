@@ -2,7 +2,7 @@ import streamlit as st
 import json, re, itertools
 from collections import defaultdict
 
-st.title("🎭 Seat Map Availability Editor — Tiers, Groups, Limits, Row-Price Max")
+st.title("🎭 Seat Map Availability Editor ")
 
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
