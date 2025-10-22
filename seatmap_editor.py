@@ -41,30 +41,31 @@ def display_prefix(pref: str) -> str:
     return pref.upper()
 
 def norm_label(s: str) -> str:
-    """Normalise, preserving hyphens for row style like 'ROW 7 - 160' -> 'row7-160'."""
+    """Normalise seat labels (handles 'Row 2 Seat 34' and other variations)."""
     s = strip_brackets(s)
-    s = s.lower()
+    s = s.lower().replace("seat", "")       # new fix: remove 'seat'
     s = re.sub(r"\s+", "", s)
     return s
 
-# NEW: split a normalised label into (prefix, number) where number is the seat number
 def split_norm_label(norm: str):
     """
     Returns (prefix, num) or None.
-    - 'row7-160' -> ('row7', 160)
-    - 'g11' -> ('g', 11)
-    - 'main-left12' -> ('main-left', 12)
+    Handles: 'row2-34', 'row 2-34', 'row2seat34', 'r2-34', etc.
     """
-    m = re.match(r"(row\d+)-(\d+)$", norm)           # row style
+    norm = norm.replace("seat", "")
+    # ROW-type formats
+    m = re.match(r"(row\d+)[\s\-]?(\d+)$", norm)
     if m:
         return m.group(1), int(m.group(2))
-    m = re.match(r"([a-z][a-z\-]{0,19})(\d+)$", norm) # alpha/word prefix
+    # alphabetic prefix formats like G11-21
+    m = re.match(r"([a-z][a-z\-]{0,19})(\d+)$", norm)
     if m:
         return m.group(1), int(m.group(2))
     return None
 
 def section_names_from_data(seat_data):
-    return [sec.get("section_name","").strip() for sec in seat_data.values()
+    return [re.sub(r"\s+", " ", sec.get("section_name", "").strip()) 
+            for sec in seat_data.values()
             if isinstance(sec, dict) and sec.get("section_name")]
 
 def parse_input_ranges(user_text: str, section_names):
@@ -82,16 +83,14 @@ def parse_input_ranges(user_text: str, section_names):
     canon_sections = {s.lower(): s for s in section_names if s}
     chunks = [c.strip() for c in re.split(r"\s*,\s*", user_text) if c.strip()]
 
-    # CHANGED: more permissive ROW patterns (allow spaces/no spaces around '-')
     rx = re.compile(
-        r"(?:(row)\s*(\d+)\s*[-–]?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"   # 'ROW 3 - 21-30' or 'ROW3-21-30'
+        r"(?:(row)\s*(\d+)\s*[-–]?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"   # 'ROW 3 - 21-30'
         r"|(?:(row)\s*(\d+)\s*[-–]?\s*(\d+))"                       # 'ROW 3 - 21'
-        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?", # 'G11-21', 'Yellow 1-12'
+        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?", # 'G11-21'
         re.I
     )
 
     for chunk in chunks:
-        # find section by longest match prefix
         sec_match = None
         chunk_low = chunk.lower()
         for low_name, canon in sorted(canon_sections.items(), key=lambda x: len(x[0]), reverse=True):
@@ -112,13 +111,13 @@ def parse_input_ranges(user_text: str, section_names):
                 start, end = int(m.group(3)), int(m.group(4))
                 a, b = sorted((start, end))
                 for n in range(a, b + 1):
-                    key = (sec_low, f"row{rownum}-{n}")  # CHANGED: canonical with hyphen
+                    key = (sec_low, f"row{rownum}-{n}")
                     requested.add(key)
                     debug_rows.append((sec_canon, key[1]))
             elif m.group(5):  # ROW X - a
                 rownum = int(m.group(6))
                 n = int(m.group(7))
-                key = (sec_low, f"row{rownum}-{n}")      # CHANGED
+                key = (sec_low, f"row{rownum}-{n}")
                 requested.add(key)
                 debug_rows.append((sec_canon, key[1]))
             else:  # alpha/word prefix
@@ -139,6 +138,11 @@ if uploaded_file:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
         st.success("✅ Seat map loaded successfully!")
 
+        # Normalise section names to prevent spacing issues
+        for sec in seat_data.values():
+            if isinstance(sec, dict) and "section_name" in sec:
+                sec["section_name"] = re.sub(r"\s+", " ", sec["section_name"]).strip()
+
         # Build current-availability map for copy/paste helper + count
         row_map = {}
         available_count = 0
@@ -148,20 +152,19 @@ if uploaded_file:
                 continue
             for row in sec["rows"].values():
                 for seat in row.get("seats", {}).values():
-                    if seat.get("status","").lower() == "av":
+                    if seat.get("status", "").lower() == "av":
                         available_count += 1
-                        norm = norm_label(seat.get("number",""))
-                        split = split_norm_label(norm)        # CHANGED
+                        norm = norm_label(seat.get("number", ""))
+                        split = split_norm_label(norm)
                         if not split:
                             continue
                         pref, num = split
                         row_map.setdefault((sec_name, pref), []).append(num)
 
         out_lines = []
-        # same sorting as before
         for (sec_name, pref), nums in sorted(row_map.items(), key=lambda x: (x[0][0].lower(), sort_key(x[0][1]))):
             for s, e in compress_ranges(nums):
-                disp_pref = display_prefix(pref)             # 'ROW 7 - ' or 'G'
+                disp_pref = display_prefix(pref)
                 out_lines.append(
                     f"{sec_name} {disp_pref}{s}" if s == e else f"{sec_name} {disp_pref}{s}-{e}"
                 )
@@ -194,7 +197,7 @@ if uploaded_file:
 
             # ── Walk the structure and apply updates ──
             for sec in seat_data.values():
-                sec_key = sec.get("section_name","").strip().lower()
+                sec_key = sec.get("section_name", "").strip().lower()
                 if "rows" not in sec:
                     continue
 
@@ -204,9 +207,9 @@ if uploaded_file:
                 for row_key, row in sec["rows"].items():
                     row_updated = False
                     for seat in row.get("seats", {}).values():
-                        label_raw = seat.get("number","")
+                        label_raw = seat.get("number", "")
                         norm = norm_label(label_raw)
-                        key_norm = (sec_key, norm)           # NEW: compare by canonical norm
+                        key_norm = (sec_key, norm)
 
                         should_update = False
                         current_status = seat.get("status", "").strip().lower()
@@ -268,10 +271,6 @@ if uploaded_file:
                 file_name="updated_seatmap.json",
                 mime="application/json"
             )
-
-            if seat_range_input:
-                st.markdown("### 🔍 Parsed Seat Targets (after run)")
-                st.table(debug_rows if 'debug_rows' in locals() else [])
 
     except Exception as e:
         st.error(f"❌ Error reading file: {e}")
