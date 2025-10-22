@@ -2,12 +2,12 @@ import streamlit as st
 import json, re, itertools
 from collections import defaultdict
 
-st.title("🎭 Seat Map Availability Editor")
+st.title("🎭 Seat Map Availability Editor — Tiers, Groups, Auto-UAV, Row-Price Max")
 
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 # ---- global UI controls ----
-multi_price_mode = st.checkbox("💰 Enable multiple price groups (Price 1 + Range 1, Price 2 + Range 2)")
+multi_price_mode = st.checkbox("💰 Enable multiple price groups (Range 1 + Price 1, Range 2 + Price 2)")
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
 
 # ───────────────── helper functions ─────────────────
@@ -64,7 +64,7 @@ def section_names_from_data(seat_data):
             names.append(re.sub(r"\s+", " ", sec["section_name"].strip()))
     return names
 
-# Parse ranges (prices set via groups/global; global disabled in price-only mode)
+# Parse ranges (prices are provided by fields; no inline @price here)
 # Returns: set[(sec_low,pref,num)]
 def parse_ranges(user_text: str, section_names):
     requested = set()
@@ -180,21 +180,20 @@ if uploaded_file:
         else:
             st.info("No available seats found.")
 
-        # ---------- Price inputs (global price is disabled when tiers are active: price-only mode) ----------
+        # ---------- Price inputs ----------
         if multi_price_mode:
             st.markdown("#### Price Group 1")
-            price1 = st.text_input("Price 1", placeholder="e.g. 60", key="price1")
             range1 = st.text_input("Seat ranges for Price 1", placeholder="e.g. Stalls A1-A4, A5-A8", key="range1")
+            price1 = st.text_input("Price 1", placeholder="e.g. 60", key="price1")
 
             st.markdown("#### Price Group 2")
-            price2 = st.text_input("Price 2", placeholder="e.g. 45", key="price2")
             range2 = st.text_input("Seat ranges for Price 2", placeholder="e.g. Rausing Circle ROW 1 - 1-6", key="range2")
+            price2 = st.text_input("Price 2", placeholder="e.g. 45", key="price2")
 
+            # No global fallback price in multi-group mode by design
+            price_input = None
             if price_only_mode:
-                price_input = None
-                st.info("Tier editing is active (price-only mode). Global price is disabled.")
-            else:
-                price_input = st.text_input("Optional global price for targeted seats (fallback)", placeholder="e.g. 65")
+                st.info("Tier editing is active (price-only mode). Availability will not change.")
         else:
             seat_range_input = st.text_input(
                 "Enter seat ranges",
@@ -202,7 +201,7 @@ if uploaded_file:
             )
             if price_only_mode:
                 price_input = None
-                st.info("Tier editing is active (price-only mode). Global price is disabled.")
+                st.info("Tier editing is active (price-only mode). Availability will not change.")
             else:
                 price_input = st.text_input("Enter new price", placeholder="e.g. 65")
 
@@ -318,7 +317,7 @@ if uploaded_file:
             if multi_price_mode:
                 # Availability changes (not in price-only mode)
                 if not price_only_mode:
-                    # Group 1 and Group 2 availability to AV
+                    # Group 1 and Group 2 seats become AV
                     for req_set in (requested_group1, requested_group2):
                         for key in req_set:
                             if key in seat_index:
@@ -338,26 +337,17 @@ if uploaded_file:
                 # Apply per-group prices (Group 1 precedence)
                 requested_group2_effective = requested_group2 - overlap
 
-                if 'price1' in locals() and price1:
+                if price1:
                     for key in requested_group1:
                         if key in seat_index:
                             seat, _ = seat_index[key]
                             seat["price"] = str(price1)
 
-                if 'price2' in locals() and price2:
+                if price2:
                     for key in requested_group2_effective:
                         if key in seat_index:
                             seat, _ = seat_index[key]
                             seat["price"] = str(price2)
-
-                # Optional global fallback for targeted seats w/o a group price (disabled in price-only mode)
-                if 'price_input' in locals() and price_input and not price_only_mode:
-                    targeted = (requested_group1 | requested_group2_effective)
-                    for key in targeted:
-                        if key in seat_index:
-                            seat, _ = seat_index[key]
-                            if not str(seat.get("price","")).strip():
-                                seat["price"] = str(price_input)
 
                 # AUTO: Limit availability to selected ranges (UAV everything else) — only when NOT price-only
                 if not price_only_mode:
@@ -390,8 +380,8 @@ if uploaded_file:
                         else:
                             missing.append(key)
 
-                # Apply global price ONLY when tiers are NOT active
-                if 'price_input' in locals() and price_input and not price_only_mode:
+                # Apply global price ONLY in single mode and NOT price-only
+                if price_input and not price_only_mode:
                     for key in requested_single:
                         if key in seat_index:
                             seat, _ = seat_index[key]
