@@ -140,6 +140,26 @@ if uploaded_file:
     try:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
         st.success("✅ Seat map loaded successfully!")
+# Debug: list all Row 1 seats we can see
+row1_list = []
+for sec in seat_data.values():
+    sec_name = sec.get("section_name", "Unknown")
+    if "rows" in sec:
+        for row_key, row in sec["rows"].items():
+            if row_key.strip().lower() in ["1", "row1", "row 1"]:
+                for seat in row.get("seats", {}).values():
+                    row1_list.append({
+                        "Section": sec_name,
+                        "Row Key": row_key,
+                        "Seat Label": seat.get("number", ""),
+                        "Norm": seat.get("number", "").encode("utf-8", "replace"),
+                        "Status": seat.get("status", "")
+                    })
+if row1_list:
+    st.markdown("### 🧩 Debug: Raw Row 1 seats from JSON")
+    st.dataframe(row1_list)
+else:
+    st.warning("No rows found with key '1' or 'row1'!")
 
         # Normalise section names to prevent spacing issues
         for sec in seat_data.values():
