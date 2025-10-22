@@ -2,13 +2,21 @@ import streamlit as st
 import json, re, itertools
 from collections import defaultdict
 
-st.title("🎭 Seat Map Availability Editor ")
+st.title("🎭 Seat Map Availability Editor — Tiers, Groups, Limits, Row-Price Max")
 
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 # ---- global UI controls ----
 multi_price_mode = st.checkbox("💰 Enable multiple price groups (Price 1 + Range 1, Price 2 + Range 2)")
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
+
+# New: availability limiter (irrelevant when price-only is on)
+limit_to_ranges = st.checkbox(
+    "🔒 Limit availability to selected ranges (set others to UAV)",
+    value=True,
+    help="When updating availability, only seats in your selected ranges will be AV; everything else becomes UAV.",
+    disabled=price_only_mode
+)
 
 # ───────────────── helper functions ─────────────────
 
@@ -64,7 +72,7 @@ def section_names_from_data(seat_data):
             names.append(re.sub(r"\s+", " ", sec["section_name"].strip()))
     return names
 
-# Parse ranges (prices are provided by group fields; global price disabled when price-only)
+# Parse ranges (prices are provided by group fields or global; global disabled in price-only mode)
 # Returns: set[(sec_low,pref,num)]
 def parse_ranges(user_text: str, section_names):
     requested = set()
@@ -114,6 +122,13 @@ def parse_ranges(user_text: str, section_names):
                     requested.add((sec_low, pref, n))
     return requested
 
+def to_price_float(v):
+    s = (str(v) if v is not None else "").strip()
+    if not s:
+        return None
+    m = re.match(r"^\d+(?:\.\d+)?$", s)
+    return float(s) if m else None
+
 # ──────────────── main UI logic ────────────────
 if uploaded_file:
     try:
@@ -132,7 +147,7 @@ if uploaded_file:
         for sec in seat_data.values():
             if not isinstance(sec, dict): 
                 continue
-            if sec.get("type", "def") == "aoi":  # skip areas of interest (no seats)
+            if sec.get("type", "def") == "aoi":  # skip areas of interest (e.g., Stage)
                 continue
             sec_disp = sec.get("section_name", "Unknown Section").strip()
             sec_low = sec_disp.lower()
@@ -152,7 +167,7 @@ if uploaded_file:
 
         st.caption(f"Indexed seats: {len(seat_index)} across {len(per_section_counts)} sections.")
 
-        # Copy-paste helper of current AV seats
+        # Build copy/paste helper of current AV seats
         row_map = defaultdict(list)
         available_count = 0
         for (sec_low, pref, num), (seat, sec_disp) in seat_index.items():
@@ -174,7 +189,6 @@ if uploaded_file:
             st.info("No available seats found.")
 
         # ---------- Price inputs (global price is disabled when tiers are active: price-only mode) ----------
-        # Tiers are automatic when price_only_mode=True, so hide/ignore global price fields in that case.
         if multi_price_mode:
             st.markdown("#### Price Group 1")
             price1 = st.text_input("Price 1", placeholder="e.g. 60", key="price1")
@@ -254,6 +268,7 @@ if uploaded_file:
         requested_group1 = set()
         requested_group2 = set()
         requested_single = set()
+        overlap = set()
 
         if multi_price_mode:
             if range1:
@@ -264,21 +279,23 @@ if uploaded_file:
             # Overlap detection: seats appearing in both groups
             overlap = requested_group1 & requested_group2
             if overlap:
-                # Pretty-print a small sample (use seat_index if available)
+                # Pretty-print a small sample
                 sec_title = {s.lower(): s for s in section_names}
                 def pretty_key(k):
                     sec_low, pref, n = k
                     sec_disp = sec_title.get(sec_low, "?")
                     pp = "ROW " + pref[3:] if pref.startswith("row") else pref.upper()
                     return f"{sec_disp} {pp}-{n}"
-
                 sample = ", ".join(pretty_key(k) for k in list(sorted(overlap))[:10])
-                st.error(f"⚠️ {len(overlap)} overlapping seats appear in both groups. "
-                         f"Group 1 takes precedence; these will be ignored in Group 2. Sample: {sample}{' …' if len(overlap)>10 else ''}")
+                st.error(
+                    f"⚠️ {len(overlap)} overlapping seats appear in both groups. "
+                    f"Group 1 takes precedence; these will be ignored in Group 2. "
+                    f"Sample: {sample}{' …' if len(overlap)>10 else ''}"
+                )
 
             st.markdown("### 🔎 Parsed Seat Targets (Preview)")
             st.write(f"Group 1 seats: **{len(requested_group1)}** | Group 2 seats: **{len(requested_group2)}** "
-                     f"{'(overlap: ' + str(len(overlap)) + ')' if multi_price_mode else ''}")
+                     f"(overlap: {len(overlap)})")
         else:
             if 'seat_range_input' in locals() and seat_range_input:
                 requested_single = parse_ranges(seat_range_input, section_names)
@@ -326,16 +343,15 @@ if uploaded_file:
                                 missing.append(key)
 
                 # Apply per-group prices, with Group 1 precedence (remove overlaps from Group 2)
-                overlap = requested_group1 & requested_group2
                 requested_group2_effective = requested_group2 - overlap
 
-                if price1:
+                if 'price1' in locals() and price1:
                     for key in requested_group1:
                         if key in seat_index:
                             seat, _ = seat_index[key]
                             seat["price"] = str(price1)
 
-                if price2:
+                if 'price2' in locals() and price2:
                     for key in requested_group2_effective:
                         if key in seat_index:
                             seat, _ = seat_index[key]
@@ -343,13 +359,25 @@ if uploaded_file:
 
                 # Optional global fallback for targeted seats w/o group price
                 # (Note: price_input is None if price_only_mode=True, so this won't run during tier edits)
-                if price_input:
+                if 'price_input' in locals() and price_input:
                     targeted = (requested_group1 | requested_group2_effective)
                     for key in targeted:
                         if key in seat_index:
                             seat, _ = seat_index[key]
                             if not str(seat.get("price","")).strip():
                                 seat["price"] = str(price_input)
+
+                # Limit availability to selected ranges (UAV everything else)
+                if not price_only_mode and limit_to_ranges:
+                    targeted = requested_group1 | requested_group2_effective
+                    turned_off = 0
+                    for key, (seat, _) in seat_index.items():
+                        if key not in targeted:
+                            if (seat.get("status","") or "").lower() != "uav":
+                                seat["status"] = "uav"
+                                turned_off += 1
+                    if turned_off:
+                        st.info(f"🔕 Set {turned_off} non-targeted seats to UAV.")
 
             # 3) Single range + price mode
             else:
@@ -371,11 +399,22 @@ if uploaded_file:
                             missing.append(key)
 
                 # Apply global price ONLY when tiers are NOT active
-                if price_input and not price_only_mode:
+                if 'price_input' in locals() and price_input and not price_only_mode:
                     for key in requested_single:
                         if key in seat_index:
                             seat, _ = seat_index[key]
                             seat["price"] = str(price_input)
+
+                # Limit availability to selected ranges (UAV everything else)
+                if not price_only_mode and limit_to_ranges and requested_single:
+                    turned_off = 0
+                    for key, (seat, _) in seat_index.items():
+                        if key not in requested_single:
+                            if (seat.get("status","") or "").lower() != "uav":
+                                seat["status"] = "uav"
+                                turned_off += 1
+                    if turned_off:
+                        st.info(f"🔕 Set {turned_off} non-targeted seats to UAV.")
 
             # Post-ops messaging
             if not price_only_mode and (requested_single or requested_group1 or requested_group2):
@@ -391,6 +430,25 @@ if uploaded_file:
             if updated_seats:
                 st.markdown("### 🎟️ Updated Seats")
                 st.dataframe(updated_seats, use_container_width=True)
+
+            # --- Normalise row-level price to the highest seat price in that row ---
+            rows_updated = 0
+            for sec in seat_data.values():
+                if not isinstance(sec, dict) or sec.get("type") == "aoi":
+                    continue
+                rows = (sec.get("rows") or {})
+                for row in rows.values():
+                    seats = (row.get("seats") or {})
+                    max_price = None
+                    for seat in seats.values():
+                        p = to_price_float(seat.get("price"))
+                        if p is not None:
+                            max_price = p if max_price is None else max(max_price, p)
+                    if max_price is not None:
+                        row["price"] = str(max_price)
+                        rows_updated += 1
+            if rows_updated:
+                st.info(f"📏 Row prices set to the highest seat price in {rows_updated} rows.")
 
             # Sample price summary
             st.markdown("### 📊 Seat Price Summary (sample)")
