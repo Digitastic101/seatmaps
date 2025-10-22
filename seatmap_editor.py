@@ -2,21 +2,13 @@ import streamlit as st
 import json, re, itertools
 from collections import defaultdict
 
-st.title("🎭 Seat Map Availability Editor ")
+st.title("🎭 Seat Map Availability Editor")
 
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 # ---- global UI controls ----
 multi_price_mode = st.checkbox("💰 Enable multiple price groups (Price 1 + Range 1, Price 2 + Range 2)")
 price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
-
-# New: availability limiter (irrelevant when price-only is on)
-limit_to_ranges = st.checkbox(
-    "🔒 Limit availability to selected ranges (set others to UAV)",
-    value=True,
-    help="When updating availability, only seats in your selected ranges will be AV; everything else becomes UAV.",
-    disabled=price_only_mode
-)
 
 # ───────────────── helper functions ─────────────────
 
@@ -72,7 +64,7 @@ def section_names_from_data(seat_data):
             names.append(re.sub(r"\s+", " ", sec["section_name"].strip()))
     return names
 
-# Parse ranges (prices are provided by group fields or global; global disabled in price-only mode)
+# Parse ranges (prices set via groups/global; global disabled in price-only mode)
 # Returns: set[(sec_low,pref,num)]
 def parse_ranges(user_text: str, section_names):
     requested = set()
@@ -324,8 +316,9 @@ if uploaded_file:
 
             # 2) Multiple price groups mode
             if multi_price_mode:
-                # Availability change (unless price-only)
+                # Availability changes (not in price-only mode)
                 if not price_only_mode:
+                    # Group 1 and Group 2 availability to AV
                     for req_set in (requested_group1, requested_group2):
                         for key in req_set:
                             if key in seat_index:
@@ -342,7 +335,7 @@ if uploaded_file:
                             else:
                                 missing.append(key)
 
-                # Apply per-group prices, with Group 1 precedence (remove overlaps from Group 2)
+                # Apply per-group prices (Group 1 precedence)
                 requested_group2_effective = requested_group2 - overlap
 
                 if 'price1' in locals() and price1:
@@ -357,9 +350,8 @@ if uploaded_file:
                             seat, _ = seat_index[key]
                             seat["price"] = str(price2)
 
-                # Optional global fallback for targeted seats w/o group price
-                # (Note: price_input is None if price_only_mode=True, so this won't run during tier edits)
-                if 'price_input' in locals() and price_input:
+                # Optional global fallback for targeted seats w/o a group price (disabled in price-only mode)
+                if 'price_input' in locals() and price_input and not price_only_mode:
                     targeted = (requested_group1 | requested_group2_effective)
                     for key in targeted:
                         if key in seat_index:
@@ -367,8 +359,8 @@ if uploaded_file:
                             if not str(seat.get("price","")).strip():
                                 seat["price"] = str(price_input)
 
-                # Limit availability to selected ranges (UAV everything else)
-                if not price_only_mode and limit_to_ranges:
+                # AUTO: Limit availability to selected ranges (UAV everything else) — only when NOT price-only
+                if not price_only_mode:
                     targeted = requested_group1 | requested_group2_effective
                     turned_off = 0
                     for key, (seat, _) in seat_index.items():
@@ -381,7 +373,7 @@ if uploaded_file:
 
             # 3) Single range + price mode
             else:
-                # Availability change (unless price-only)
+                # Availability changes (not in price-only mode)
                 if not price_only_mode and requested_single:
                     for key in requested_single:
                         if key in seat_index:
@@ -405,11 +397,12 @@ if uploaded_file:
                             seat, _ = seat_index[key]
                             seat["price"] = str(price_input)
 
-                # Limit availability to selected ranges (UAV everything else)
-                if not price_only_mode and limit_to_ranges and requested_single:
+                # AUTO: Limit availability to selected ranges (UAV everything else) — only when NOT price-only
+                if not price_only_mode:
+                    targeted = requested_single
                     turned_off = 0
                     for key, (seat, _) in seat_index.items():
-                        if key not in requested_single:
+                        if key not in targeted:
                             if (seat.get("status","") or "").lower() != "uav":
                                 seat["status"] = "uav"
                                 turned_off += 1
