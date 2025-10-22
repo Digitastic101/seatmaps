@@ -6,7 +6,7 @@ st.title("🎭 Seat Map Availability Editor")
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
 seat_range_input = st.text_input(
-    "Enter seat ranges (e.g. Stalls C23-C28, Dress Circle ROW 1 - 5-12, Yellow A3-5, Platform 1 F8-19)",
+    "Enter seat ranges (e.g. Rausing Circle ROW 1 - 64-106, Rausing Circle ROW 2 - 34-87, Stalls C23-28)",
     placeholder="Rausing Circle ROW 1 - 64-106, Rausing Circle ROW 2 - 34-87"
 )
 
@@ -40,38 +40,43 @@ def display_prefix(pref: str) -> str:
             return f"ROW {m.group(1)} - "
     return pref.upper()
 
-# ── Single source of truth normaliser ──
+# Normalise any seat label string from JSON (or constructed)
 def norm_label(s: str) -> str:
-    """Normalise seat labels (handles en/em dashes, spacing, 'seat', leading zeros)."""
     s = strip_brackets(s or "")
-    s = s.replace("–", "-").replace("—", "-")  # normalise en/em dashes
+    s = s.replace("–", "-").replace("—", "-")   # en/em dash → hyphen
     s = s.lower().replace("seat", "")
-    s = re.sub(r"\s*-\s*", "-", s)            # normalise hyphen spacing
-    s = re.sub(r"\s+", "", s)                 # remove stray spaces
-    s = re.sub(r"row0?(\d+)", r"row\1", s)    # drop leading zero in row
+    s = re.sub(r"\s*-\s*", "-", s)              # tidy hyphens
+    s = re.sub(r"\s+", "", s)                   # remove all remaining spaces
+    s = re.sub(r"row0?(\d+)", r"row\1", s)      # drop leading zero in row number
     return s
 
+# Split a normalised label into (prefix, number)
+# Examples:
+#   'row1-157'  → ('row1', 157)
+#   'row1157'   → ('row1', 157)
+#   'g11'       → ('g', 11)
+#   'main-left15' → ('main-left', 15)
 def split_norm_label(norm: str):
-    """Split a normalised label into (prefix, number) for both row and alpha formats."""
     norm = norm.replace("seat", "")
-    m = re.match(r"(row\d+)-?(\d+)$", norm)    # row1-157 or row1157
+    m = re.match(r"(row\d+)-?(\d+)$", norm)     # allow with/without hyphen
     if m:
         return m.group(1), int(m.group(2))
-    m = re.match(r"([a-z][a-z\-]{0,19})(\d+)$", norm)  # e.g. g11, main-left15
+    m = re.match(r"([a-z][a-z\-]{0,19})(\d+)$", norm)
     if m:
         return m.group(1), int(m.group(2))
     return None
 
 def section_names_from_data(seat_data):
-    """Return normalised section names (trim extra spaces)."""
     return [re.sub(r"\s+", " ", sec.get("section_name", "").strip())
             for sec in seat_data.values()
             if isinstance(sec, dict) and sec.get("section_name")]
 
+# ── NEW: parse to tuples (section_low, prefix, number) instead of strings
 def parse_input_ranges(user_text: str, section_names):
     """
-    Parse seat-range text into canonical keys (section, normalised seat string).
-    IMPORTANT: seat key strings are built via norm_label("ROW {row} - {n}") so they match JSON exactly.
+    Returns:
+      requested_set: set[(section_low, prefix, number)]
+      debug_rows   : list[(Section Display Name, 'prefix-number')]
     """
     requested = set()
     debug_rows = []
@@ -82,14 +87,14 @@ def parse_input_ranges(user_text: str, section_names):
     chunks = [c.strip() for c in re.split(r"\s*,\s*", user_text) if c.strip()]
 
     rx = re.compile(
-        r"(?:(row)\s*(\d+)\s*[-–]?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"   # ROW X - a-b
-        r"|(?:(row)\s*(\d+)\s*[-–]?\s*(\d+))"                       # ROW X - a
-        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?",  # G11-21, Yellow 1-12
+        r"(?:(row)\s*(\d+)\s*[-–]?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"     # ROW X - a-b
+        r"|(?:(row)\s*(\d+)\s*[-–]?\s*(\d+))"                         # ROW X - a
+        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?",# G11-21, Yellow 1-12
         re.I
     )
 
     for chunk in chunks:
-        # section match (longest first)
+        # find section (longest matching name first)
         sec_match = None
         chunk_low = chunk.lower()
         for low_name, canon in sorted(canon_sections.items(), key=lambda x: len(x[0]), reverse=True):
@@ -109,26 +114,24 @@ def parse_input_ranges(user_text: str, section_names):
                 rownum = int(m.group(2))
                 a, b = int(m.group(3)), int(m.group(4))
                 lo, hi = sorted((a, b))
+                pref = f"row{rownum}"
                 for n in range(lo, hi + 1):
-                    # 🔑 Build seat key via the SAME normaliser used for JSON seats
-                    seat_key = norm_label(f"ROW {rownum} - {n}")
-                    requested.add((sec_low, seat_key))
-                    debug_rows.append((sec_canon, seat_key))
+                    requested.add((sec_low, pref, n))
+                    debug_rows.append((sec_canon, f"{pref}-{n}"))
             elif m.group(5):  # ROW X - a
                 rownum = int(m.group(6))
                 n = int(m.group(7))
-                seat_key = norm_label(f"ROW {rownum} - {n}")
-                requested.add((sec_low, seat_key))
-                debug_rows.append((sec_canon, seat_key))
+                pref = f"row{rownum}"
+                requested.add((sec_low, pref, n))
+                debug_rows.append((sec_canon, f"{pref}-{n}"))
             else:  # alpha/word prefix
                 pref = m.group(8).lower()
                 a = int(m.group(9))
                 b = int(m.group(10) or m.group(9))
                 lo, hi = sorted((a, b))
                 for n in range(lo, hi + 1):
-                    seat_key = norm_label(f"{pref}{n}")
-                    requested.add((sec_low, seat_key))
-                    debug_rows.append((sec_canon, seat_key))
+                    requested.add((sec_low, pref, n))
+                    debug_rows.append((sec_canon, f"{pref}-{n}"))
 
     return requested, debug_rows
 
@@ -138,12 +141,12 @@ if uploaded_file:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
         st.success("✅ Seat map loaded successfully!")
 
-        # Normalise section names once to prevent spacing/key issues
+        # Normalise section names to prevent spacing issues
         for sec in seat_data.values():
             if isinstance(sec, dict) and "section_name" in sec:
                 sec["section_name"] = re.sub(r"\s+", " ", sec["section_name"]).strip()
 
-        # Build current-availability map for copy/paste helper + count
+        # Build copy/paste helper from current AV seats
         row_map = {}
         available_count = 0
         for sec in seat_data.values():
@@ -165,9 +168,7 @@ if uploaded_file:
         for (sec_name, pref), nums in sorted(row_map.items(), key=lambda x: (x[0][0].lower(), sort_key(x[0][1]))):
             for s, e in compress_ranges(nums):
                 disp_pref = display_prefix(pref)
-                out_lines.append(
-                    f"{sec_name} {disp_pref}{s}" if s == e else f"{sec_name} {disp_pref}{s}-{e}"
-                )
+                out_lines.append(f"{sec_name} {disp_pref}{s}" if s == e else f"{sec_name} {disp_pref}{s}-{e}")
 
         st.markdown("### 🪑 Copy-Paste Friendly Available Seat Ranges")
         if out_lines:
@@ -176,7 +177,7 @@ if uploaded_file:
         else:
             st.info("No available seats found.")
 
-        # Preview what the input will target
+        # Preview what the input will target (now as tuples)
         if seat_range_input:
             section_names = section_names_from_data(seat_data)
             requested_preview, debug_list = parse_input_ranges(seat_range_input, section_names)
@@ -195,7 +196,7 @@ if uploaded_file:
             section_names = section_names_from_data(seat_data)
             requested, debug_rows = parse_input_ranges(seat_range_input, section_names)
 
-            # ── Walk the structure and apply updates ──
+            # ── Walk the structure and apply updates using tuple comparisons ──
             for sec in seat_data.values():
                 sec_key = sec.get("section_name", "").strip().lower()
                 if "rows" not in sec:
@@ -209,14 +210,19 @@ if uploaded_file:
                     for seat in row.get("seats", {}).values():
                         label_raw = seat.get("number", "")
                         norm = norm_label(label_raw)
-                        key_norm = (sec_key, norm)
+                        split = split_norm_label(norm)
+                        if not split:
+                            continue
+                        pref, num = split
+
+                        key_tuple = (sec_key, pref, num)
 
                         should_update = False
                         current_status = seat.get("status", "").strip().lower()
 
                         if seat_range_input and not price_only_mode:
-                            if key_norm in requested:
-                                found.add(key_norm)
+                            if key_tuple in requested:
+                                found.add(key_tuple)
                                 matched.append(f"{sec.get('section_name','')} {label_raw.strip()}")
                                 if current_status != "av":
                                     seat["status"] = "av"
@@ -252,7 +258,9 @@ if uploaded_file:
                 st.write(", ".join(sorted(matched)) if matched else "No seat availability was changed.")
                 missing = {k for k in requested if k not in found}
                 if missing:
-                    pretty = [f"{sec.title()} {seat.upper()}" for sec, seat in sorted(missing)]
+                    # pretty-print missing as Section PREFIX-N
+                    sec_title = {s.lower(): s for s in section_names_from_data(seat_data)}
+                    pretty = [f"{sec_title.get(sec,'?')} {pref.upper()}-{n}" for (sec, pref, n) in sorted(missing)]
                     st.warning("⚠️ Seats not found: " + ", ".join(pretty))
 
             if updated_seats:
