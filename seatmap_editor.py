@@ -1,7 +1,7 @@
 import streamlit as st
 import json, re, itertools
 
-st.title("🎭 Seat Map Availability Editor")
+st.title("🎭 Seat Map Availability Editor (Debug Version)")
 
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
@@ -40,25 +40,20 @@ def display_prefix(pref: str) -> str:
             return f"ROW {m.group(1)} - "
     return pref.upper()
 
-# Normalise any seat label string from JSON (or constructed)
 def norm_label(s: str) -> str:
+    """Normalise seat labels (handles en/em dashes, spacing, seat text, leading zeros)."""
     s = strip_brackets(s or "")
-    s = s.replace("–", "-").replace("—", "-")   # en/em dash → hyphen
+    s = s.replace("–", "-").replace("—", "-")  # replace fancy dashes
+    s = s.replace("\u00a0", " ").replace("\u202f", " ")  # replace non-breaking spaces
     s = s.lower().replace("seat", "")
-    s = re.sub(r"\s*-\s*", "-", s)              # tidy hyphens
-    s = re.sub(r"\s+", "", s)                   # remove all remaining spaces
-    s = re.sub(r"row0?(\d+)", r"row\1", s)      # drop leading zero in row number
+    s = re.sub(r"\s*-\s*", "-", s)
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"row0?(\d+)", r"row\1", s)
     return s
 
-# Split a normalised label into (prefix, number)
-# Examples:
-#   'row1-157'  → ('row1', 157)
-#   'row1157'   → ('row1', 157)
-#   'g11'       → ('g', 11)
-#   'main-left15' → ('main-left', 15)
 def split_norm_label(norm: str):
     norm = norm.replace("seat", "")
-    m = re.match(r"(row\d+)-?(\d+)$", norm)     # allow with/without hyphen
+    m = re.match(r"(row\d+)-?(\d+)$", norm)
     if m:
         return m.group(1), int(m.group(2))
     m = re.match(r"([a-z][a-z\-]{0,19})(\d+)$", norm)
@@ -71,13 +66,8 @@ def section_names_from_data(seat_data):
             for sec in seat_data.values()
             if isinstance(sec, dict) and sec.get("section_name")]
 
-# ── NEW: parse to tuples (section_low, prefix, number) instead of strings
 def parse_input_ranges(user_text: str, section_names):
-    """
-    Returns:
-      requested_set: set[(section_low, prefix, number)]
-      debug_rows   : list[(Section Display Name, 'prefix-number')]
-    """
+    """Parse seat-range text into canonical keys (section, prefix, seatnum)."""
     requested = set()
     debug_rows = []
     if not user_text:
@@ -87,14 +77,13 @@ def parse_input_ranges(user_text: str, section_names):
     chunks = [c.strip() for c in re.split(r"\s*,\s*", user_text) if c.strip()]
 
     rx = re.compile(
-        r"(?:(row)\s*(\d+)\s*[-–]?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"     # ROW X - a-b
-        r"|(?:(row)\s*(\d+)\s*[-–]?\s*(\d+))"                         # ROW X - a
-        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?",# G11-21, Yellow 1-12
+        r"(?:(row)\s*(\d+)\s*[-–]?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"
+        r"|(?:(row)\s*(\d+)\s*[-–]?\s*(\d+))"
+        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?",
         re.I
     )
 
     for chunk in chunks:
-        # find section (longest matching name first)
         sec_match = None
         chunk_low = chunk.lower()
         for low_name, canon in sorted(canon_sections.items(), key=lambda x: len(x[0]), reverse=True):
@@ -113,26 +102,21 @@ def parse_input_ranges(user_text: str, section_names):
             if m.group(1):  # ROW X - a-b
                 rownum = int(m.group(2))
                 a, b = int(m.group(3)), int(m.group(4))
-                lo, hi = sorted((a, b))
-                pref = f"row{rownum}"
-                for n in range(lo, hi + 1):
-                    requested.add((sec_low, pref, n))
-                    debug_rows.append((sec_canon, f"{pref}-{n}"))
+                for n in range(min(a, b), max(a, b) + 1):
+                    requested.add((sec_low, f"row{rownum}", n))
+                    debug_rows.append((sec_canon, f"row{rownum}-{n}"))
             elif m.group(5):  # ROW X - a
                 rownum = int(m.group(6))
                 n = int(m.group(7))
-                pref = f"row{rownum}"
-                requested.add((sec_low, pref, n))
-                debug_rows.append((sec_canon, f"{pref}-{n}"))
+                requested.add((sec_low, f"row{rownum}", n))
+                debug_rows.append((sec_canon, f"row{rownum}-{n}"))
             else:  # alpha/word prefix
                 pref = m.group(8).lower()
                 a = int(m.group(9))
                 b = int(m.group(10) or m.group(9))
-                lo, hi = sorted((a, b))
-                for n in range(lo, hi + 1):
+                for n in range(min(a, b), max(a, b) + 1):
                     requested.add((sec_low, pref, n))
                     debug_rows.append((sec_canon, f"{pref}-{n}"))
-
     return requested, debug_rows
 
 # ──────────────── main UI logic ────────────────
@@ -140,33 +124,34 @@ if uploaded_file:
     try:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
         st.success("✅ Seat map loaded successfully!")
-# Debug: list all Row 1 seats we can see
-row1_list = []
-for sec in seat_data.values():
-    sec_name = sec.get("section_name", "Unknown")
-    if "rows" in sec:
-        for row_key, row in sec["rows"].items():
-            if row_key.strip().lower() in ["1", "row1", "row 1"]:
-                for seat in row.get("seats", {}).values():
-                    row1_list.append({
-                        "Section": sec_name,
-                        "Row Key": row_key,
-                        "Seat Label": seat.get("number", ""),
-                        "Norm": seat.get("number", "").encode("utf-8", "replace"),
-                        "Status": seat.get("status", "")
-                    })
-if row1_list:
-    st.markdown("### 🧩 Debug: Raw Row 1 seats from JSON")
-    st.dataframe(row1_list)
-else:
-    st.warning("No rows found with key '1' or 'row1'!")
 
-        # Normalise section names to prevent spacing issues
+        # 🔍 DEBUG BLOCK: list all Row 1 seats found
+        row1_list = []
+        for sec in seat_data.values():
+            sec_name = sec.get("section_name", "Unknown")
+            if "rows" in sec:
+                for row_key, row in sec["rows"].items():
+                    if row_key.strip().lower() in ["1", "row1", "row 1"]:
+                        for seat in row.get("seats", {}).values():
+                            row1_list.append({
+                                "Section": sec_name,
+                                "Row Key": repr(row_key),
+                                "Seat Label": seat.get("number", ""),
+                                "Norm (bytes)": seat.get("number", "").encode("utf-8", "replace"),
+                                "Normalised": norm_label(seat.get("number", "")),
+                                "Status": seat.get("status", "")
+                            })
+        if row1_list:
+            st.markdown("### 🧩 Debug: Raw Row 1 seats from JSON")
+            st.dataframe(row1_list)
+        else:
+            st.warning("No rows found with key '1', 'row1', or 'row 1'!")
+
+        # ─────────── continue normal logic ───────────
         for sec in seat_data.values():
             if isinstance(sec, dict) and "section_name" in sec:
                 sec["section_name"] = re.sub(r"\s+", " ", sec["section_name"]).strip()
 
-        # Build copy/paste helper from current AV seats
         row_map = {}
         available_count = 0
         for sec in seat_data.values():
@@ -197,7 +182,6 @@ else:
         else:
             st.info("No available seats found.")
 
-        # Preview what the input will target (now as tuples)
         if seat_range_input:
             section_names = section_names_from_data(seat_data)
             requested_preview, debug_list = parse_input_ranges(seat_range_input, section_names)
@@ -205,100 +189,6 @@ else:
             st.write(f"Targets parsed: **{len(requested_preview)}** seats")
             if debug_list:
                 st.dataframe([{"Section": s, "Seat (normalised)": n} for s, n in debug_list])
-
-        if st.button("▶️ Go"):
-            price_value = price_input.strip() or None
-            matched = []
-            found = set()
-            updated_seats = []
-            row_price_map = {}
-
-            section_names = section_names_from_data(seat_data)
-            requested, debug_rows = parse_input_ranges(seat_range_input, section_names)
-
-            # ── Walk the structure and apply updates using tuple comparisons ──
-            for sec in seat_data.values():
-                sec_key = sec.get("section_name", "").strip().lower()
-                if "rows" not in sec:
-                    continue
-
-                if price_value:
-                    sec["price"] = price_value
-
-                for row_key, row in sec["rows"].items():
-                    row_updated = False
-                    for seat in row.get("seats", {}).values():
-                        label_raw = seat.get("number", "")
-                        norm = norm_label(label_raw)
-                        split = split_norm_label(norm)
-                        if not split:
-                            continue
-                        pref, num = split
-
-                        key_tuple = (sec_key, pref, num)
-
-                        should_update = False
-                        current_status = seat.get("status", "").strip().lower()
-
-                        if seat_range_input and not price_only_mode:
-                            if key_tuple in requested:
-                                found.add(key_tuple)
-                                matched.append(f"{sec.get('section_name','')} {label_raw.strip()}")
-                                if current_status != "av":
-                                    seat["status"] = "av"
-                                    should_update = True
-                            else:
-                                if current_status == "av":
-                                    seat["status"] = "uav"
-                                    should_update = True
-
-                        if price_value and seat.get("price") != price_value:
-                            seat["price"] = price_value
-                            should_update = True
-
-                        if should_update:
-                            updated_seats.append({
-                                "Section": sec.get("section_name",""),
-                                "Seat": label_raw.strip(),
-                                "Status": seat.get("status",""),
-                                "Price": seat.get("price","")
-                            })
-                            row_updated = True
-
-                    if (row_updated or price_only_mode) and price_value:
-                        row["price"] = price_value
-                        row["row_price"] = price_value
-                        row_price_map[f"{sec.get('section_name','')} - {row_key}"] = price_value
-
-            if price_value:
-                st.success(f"💸 Prices updated to {price_value} across all matching seats, rows & sections.")
-
-            if not price_only_mode and seat_range_input:
-                st.markdown("### ✅ Availability Updated")
-                st.write(", ".join(sorted(matched)) if matched else "No seat availability was changed.")
-                missing = {k for k in requested if k not in found}
-                if missing:
-                    # pretty-print missing as Section PREFIX-N
-                    sec_title = {s.lower(): s for s in section_names_from_data(seat_data)}
-                    pretty = [f"{sec_title.get(sec,'?')} {pref.upper()}-{n}" for (sec, pref, n) in sorted(missing)]
-                    st.warning("⚠️ Seats not found: " + ", ".join(pretty))
-
-            if updated_seats:
-                st.markdown("### 🎟️ Updated Seats with Prices")
-                st.dataframe(updated_seats)
-            else:
-                st.info("No updated seat prices to display.")
-
-            if row_price_map:
-                st.markdown("### 📊 Row Price Summary")
-                st.dataframe([{"Row": k, "Price": v} for k, v in sorted(row_price_map.items())])
-
-            st.download_button(
-                "Download Updated JSON",
-                json.dumps(seat_data, indent=2),
-                file_name="updated_seatmap.json",
-                mime="application/json"
-            )
 
     except Exception as e:
         st.error(f"❌ Error reading file: {e}")
