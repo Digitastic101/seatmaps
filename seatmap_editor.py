@@ -40,17 +40,17 @@ def display_prefix(pref: str) -> str:
             return f"ROW {m.group(1)} - "
     return pref.upper()
 
-# ✅ Fixed normalisation to handle Row 1 formatting quirks
+# ✅ FIXED — normalises en-dash & em-dash differences
 def norm_label(s: str) -> str:
-    """Normalise seat labels (handles Row 1 Seat 157, Row1-157, Row01-157, etc)."""
+    """Normalise seat labels (handles en/em dashes, Row 1 Seat 157, Row01-157, etc)."""
     s = strip_brackets(s or "")
+    s = s.replace("–", "-").replace("—", "-")  # ← FIX: convert fancy dashes to hyphen
     s = s.lower().replace("seat", "")
     s = re.sub(r"\s*-\s*", "-", s)          # normalise hyphen spacing
     s = re.sub(r"\s+", "", s)               # remove stray spaces
     s = re.sub(r"row0?(\d+)", r"row\1", s)  # drop any leading zero
     return s
 
-# ✅ More flexible split
 def split_norm_label(norm: str):
     """Split a normalised label into (prefix, number) for both row and alpha formats."""
     norm = norm.replace("seat", "")
@@ -71,12 +71,7 @@ def section_names_from_data(seat_data):
             if isinstance(sec, dict) and sec.get("section_name")]
 
 def parse_input_ranges(user_text: str, section_names):
-    """
-    Section-aware parser.
-    Keys stored exactly as the seat labels are normalised:
-      - row style -> 'row{rownum}-{seatnum}'
-      - alpha/word -> '{prefix}{seatnum}'
-    """
+    """Parse seat-range text into canonical keys (section, normalised seat label)."""
     requested = set()
     debug_rows = []
     if not user_text:
