@@ -2,7 +2,7 @@ import streamlit as st
 import json, re, itertools
 from collections import defaultdict
 
-st.title("🎭 Seat Map Availability Editor")
+st.title("🎭 Seat Map Availability Editor — Tiers, Groups, Auto-UAV, Row Max Price")
 
 uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
 
@@ -64,7 +64,7 @@ def section_names_from_data(seat_data):
             names.append(re.sub(r"\s+", " ", sec["section_name"].strip()))
     return names
 
-# Parse ranges (prices are provided by fields; no inline @price here)
+# Parse ranges (prices provided by fields; no inline @price)
 # Returns: set[(sec_low,pref,num)]
 def parse_ranges(user_text: str, section_names):
     requested = set()
@@ -121,6 +121,27 @@ def to_price_float(v):
     m = re.match(r"^\d+(?:\.\d+)?$", s)
     return float(s) if m else None
 
+def set_row_price_to_max_only(seat_data):
+    """Set row['price'] to the highest numeric seat price found in that row.
+    Never modifies seat prices."""
+    rows_updated = 0
+    for sec in seat_data.values():
+        if not isinstance(sec, dict) or sec.get("type") == "aoi":
+            continue
+        rows = (sec.get("rows") or {})
+        for row in rows.values():
+            seats = (row.get("seats") or {})
+            max_price = None
+            for seat in seats.values():
+                s = (str(seat.get("price")) if seat.get("price") is not None else "").strip()
+                if re.match(r"^\d+(?:\.\d+)?$", s):
+                    p = float(s)
+                    max_price = p if max_price is None else max(max_price, p)
+            if max_price is not None:
+                row["price"] = str(max_price)
+                rows_updated += 1
+    return rows_updated
+
 # ──────────────── main UI logic ────────────────
 if uploaded_file:
     try:
@@ -145,7 +166,7 @@ if uploaded_file:
             sec_low = sec_disp.lower()
             rows = sec.get("rows", {}) or {}
             for row in rows.values():
-                seats = (row or {}).get("seats", {}) or {}
+                seats = (row.get("seats") or {}) or {}
                 for seat in seats.values():
                     raw = seat.get("number", "")
                     norm = norm_label(raw)
@@ -334,7 +355,7 @@ if uploaded_file:
                             else:
                                 missing.append(key)
 
-                # Apply per-group prices (Group 1 precedence)
+                # Apply per-group prices (Group 1 precedence; remove overlaps from Group 2)
                 requested_group2_effective = requested_group2 - overlap
 
                 if price1:
@@ -381,7 +402,7 @@ if uploaded_file:
                             missing.append(key)
 
                 # Apply global price ONLY in single mode and NOT price-only
-                if price_input and not price_only_mode:
+                if not price_only_mode and 'price_input' in locals() and price_input:
                     for key in requested_single:
                         if key in seat_index:
                             seat, _ = seat_index[key]
@@ -414,24 +435,39 @@ if uploaded_file:
                 st.markdown("### 🎟️ Updated Seats")
                 st.dataframe(updated_seats, use_container_width=True)
 
-            # --- Normalise row-level price to the highest seat price in that row ---
-            rows_updated = 0
+            # --- Row price = max of seat prices in that row (never touches seat prices) ---
+            rows_updated = set_row_price_to_max_only(seat_data)
+            if rows_updated:
+                st.info(f"📏 Row prices set to the highest seat price in {rows_updated} rows.")
+
+            # Optional: show seats priced below their row (visibility only)
+            mismatches = []
             for sec in seat_data.values():
                 if not isinstance(sec, dict) or sec.get("type") == "aoi":
                     continue
                 rows = (sec.get("rows") or {})
-                for row in rows.values():
+                for row_name, row in rows.items():
+                    row_price_s = (str(row.get("price")) if row.get("price") is not None else "").strip()
+                    row_price = float(row_price_s) if re.match(r"^\d+(?:\.\d+)?$", row_price_s) else None
+                    if row_price is None:
+                        continue
                     seats = (row.get("seats") or {})
-                    max_price = None
                     for seat in seats.values():
-                        p = to_price_float(seat.get("price"))
-                        if p is not None:
-                            max_price = p if max_price is None else max(max_price, p)
-                    if max_price is not None:
-                        row["price"] = str(max_price)
-                        rows_updated += 1
-            if rows_updated:
-                st.info(f"📏 Row prices set to the highest seat price in {rows_updated} rows.")
+                        seat_num = seat.get("number","")
+                        seat_price_s = (str(seat.get("price")) if seat.get("price") is not None else "").strip()
+                        if re.match(r"^\d+(?:\.\d+)?$", seat_price_s):
+                            seat_price = float(seat_price_s)
+                            if seat_price < row_price:
+                                mismatches.append({
+                                    "Section": sec.get("section_name",""),
+                                    "Row": row_name,
+                                    "Seat": seat_num,
+                                    "Row Price": row_price_s,
+                                    "Seat Price": seat_price_s
+                                })
+            if mismatches:
+                st.markdown("### 🔎 Seats priced below their row (expected, just for visibility)")
+                st.dataframe(mismatches[:300], use_container_width=True)
 
             # Sample price summary
             st.markdown("### 📊 Seat Price Summary (sample)")
