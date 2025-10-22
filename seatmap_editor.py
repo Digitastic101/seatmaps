@@ -7,7 +7,7 @@ uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"]
 
 seat_range_input = st.text_input(
     "Enter seat ranges (e.g. Stalls C23-C28, Dress Circle ROW 1 - 5-12, Yellow A3-5, Platform 1 F8-19)",
-    placeholder="Rausing Circle ROW 7 - 157-171, Platform 1 G11-21"
+    placeholder="Rausing Circle ROW 1 - 64-106, Rausing Circle ROW 2 - 34-87"
 )
 
 price_input = st.text_input("Enter new price for all seats (optional)", placeholder="e.g. 65")
@@ -40,38 +40,39 @@ def display_prefix(pref: str) -> str:
             return f"ROW {m.group(1)} - "
     return pref.upper()
 
-# ✅ FIXED — normalises en-dash & em-dash differences
+# ── Single source of truth normaliser ──
 def norm_label(s: str) -> str:
-    """Normalise seat labels (handles en/em dashes, Row 1 Seat 157, Row01-157, etc)."""
+    """Normalise seat labels (handles en/em dashes, spacing, 'seat', leading zeros)."""
     s = strip_brackets(s or "")
-    s = s.replace("–", "-").replace("—", "-")  # ← FIX: convert fancy dashes to hyphen
+    s = s.replace("–", "-").replace("—", "-")  # normalise en/em dashes
     s = s.lower().replace("seat", "")
-    s = re.sub(r"\s*-\s*", "-", s)          # normalise hyphen spacing
-    s = re.sub(r"\s+", "", s)               # remove stray spaces
-    s = re.sub(r"row0?(\d+)", r"row\1", s)  # drop any leading zero
+    s = re.sub(r"\s*-\s*", "-", s)            # normalise hyphen spacing
+    s = re.sub(r"\s+", "", s)                 # remove stray spaces
+    s = re.sub(r"row0?(\d+)", r"row\1", s)    # drop leading zero in row
     return s
 
 def split_norm_label(norm: str):
     """Split a normalised label into (prefix, number) for both row and alpha formats."""
     norm = norm.replace("seat", "")
-    # match row-number-seat style
-    m = re.match(r"(row\d+)[\-]?(\d+)$", norm)
+    m = re.match(r"(row\d+)-?(\d+)$", norm)    # row1-157 or row1157
     if m:
         return m.group(1), int(m.group(2))
-    # fallback for alpha/word prefixes like G11, main-left15, etc.
-    m = re.match(r"([a-z][a-z\-]{0,19})(\d+)$", norm)
+    m = re.match(r"([a-z][a-z\-]{0,19})(\d+)$", norm)  # e.g. g11, main-left15
     if m:
         return m.group(1), int(m.group(2))
     return None
 
 def section_names_from_data(seat_data):
     """Return normalised section names (trim extra spaces)."""
-    return [re.sub(r"\s+", " ", sec.get("section_name", "").strip()) 
+    return [re.sub(r"\s+", " ", sec.get("section_name", "").strip())
             for sec in seat_data.values()
             if isinstance(sec, dict) and sec.get("section_name")]
 
 def parse_input_ranges(user_text: str, section_names):
-    """Parse seat-range text into canonical keys (section, normalised seat label)."""
+    """
+    Parse seat-range text into canonical keys (section, normalised seat string).
+    IMPORTANT: seat key strings are built via norm_label("ROW {row} - {n}") so they match JSON exactly.
+    """
     requested = set()
     debug_rows = []
     if not user_text:
@@ -81,13 +82,14 @@ def parse_input_ranges(user_text: str, section_names):
     chunks = [c.strip() for c in re.split(r"\s*,\s*", user_text) if c.strip()]
 
     rx = re.compile(
-        r"(?:(row)\s*(\d+)\s*[-–]?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"
-        r"|(?:(row)\s*(\d+)\s*[-–]?\s*(\d+))"
-        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?",
+        r"(?:(row)\s*(\d+)\s*[-–]?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"   # ROW X - a-b
+        r"|(?:(row)\s*(\d+)\s*[-–]?\s*(\d+))"                       # ROW X - a
+        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?",  # G11-21, Yellow 1-12
         re.I
     )
 
     for chunk in chunks:
+        # section match (longest first)
         sec_match = None
         chunk_low = chunk.lower()
         for low_name, canon in sorted(canon_sections.items(), key=lambda x: len(x[0]), reverse=True):
@@ -105,25 +107,28 @@ def parse_input_ranges(user_text: str, section_names):
         for m in rx.finditer(rest):
             if m.group(1):  # ROW X - a-b
                 rownum = int(m.group(2))
-                start, end = int(m.group(3)), int(m.group(4))
-                for n in range(min(start, end), max(start, end) + 1):
-                    key = (sec_low, f"row{rownum}-{n}")
-                    requested.add(key)
-                    debug_rows.append((sec_canon, key[1]))
+                a, b = int(m.group(3)), int(m.group(4))
+                lo, hi = sorted((a, b))
+                for n in range(lo, hi + 1):
+                    # 🔑 Build seat key via the SAME normaliser used for JSON seats
+                    seat_key = norm_label(f"ROW {rownum} - {n}")
+                    requested.add((sec_low, seat_key))
+                    debug_rows.append((sec_canon, seat_key))
             elif m.group(5):  # ROW X - a
                 rownum = int(m.group(6))
                 n = int(m.group(7))
-                key = (sec_low, f"row{rownum}-{n}")
-                requested.add(key)
-                debug_rows.append((sec_canon, key[1]))
+                seat_key = norm_label(f"ROW {rownum} - {n}")
+                requested.add((sec_low, seat_key))
+                debug_rows.append((sec_canon, seat_key))
             else:  # alpha/word prefix
                 pref = m.group(8).lower()
                 a = int(m.group(9))
                 b = int(m.group(10) or m.group(9))
-                for n in range(min(a, b), max(a, b) + 1):
-                    key = (sec_low, f"{pref}{n}")
-                    requested.add(key)
-                    debug_rows.append((sec_canon, key[1]))
+                lo, hi = sorted((a, b))
+                for n in range(lo, hi + 1):
+                    seat_key = norm_label(f"{pref}{n}")
+                    requested.add((sec_low, seat_key))
+                    debug_rows.append((sec_canon, seat_key))
 
     return requested, debug_rows
 
@@ -133,7 +138,7 @@ if uploaded_file:
         seat_data = json.loads(uploaded_file.read().decode("utf-8"))
         st.success("✅ Seat map loaded successfully!")
 
-        # Normalise section names to prevent spacing issues
+        # Normalise section names once to prevent spacing/key issues
         for sec in seat_data.values():
             if isinstance(sec, dict) and "section_name" in sec:
                 sec["section_name"] = re.sub(r"\s+", " ", sec["section_name"]).strip()
