@@ -365,7 +365,7 @@ if uploaded_file:
                 for (sec_low, pref, num), (seat, sec_disp) in seat_index.items():
                     if (seat.get("status","") or "").lower() != "av":
                         continue
-                    cur_price = str(seat.get("price",""))).strip() or "∅"
+                    cur_price = str(seat.get("price","")).strip() or "∅"
                     new_p = tier_new_values.get((sec_disp, cur_price))
                     if new_p:
                         seat["price"] = str(new_p)
