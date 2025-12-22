@@ -1,189 +1,257 @@
 import streamlit as st
 import json, re, itertools
-from collections import defaultdict, Counter
+from collections import defaultdict
 
-st.title("🎭 Seat Map Availability Editor ")
+# =========================
+#  🎭 Seat Map Availability Editor
+# =========================
+st.set_page_config(page_title="🎭 Seat Map Availability Editor", layout="wide")
+st.title("🎭 Seat Map Availability Editor")
 
-uploaded_file = st.file_uploader("Upload your seat map JSON file", type=["json"])
+# ---------- Utilities ----------
 
-# ---- global UI controls ----
-multi_price_mode = st.checkbox("💰 Enable multiple price groups (any number you like)")
-price_only_mode = st.checkbox("💸 Only update seat prices (leave availability unchanged)")
+def norm(s: str) -> str:
+    return (s or "").strip().lower()
 
-# ───────────────── helper functions ─────────────────
+def safe_load_json(uploaded_file):
+    try:
+        return json.load(uploaded_file)
+    except Exception as e:
+        st.error(f"Could not read JSON: {e}")
+        return None
 
-BRACKET_RX = re.compile(r"(\([^)]*\))")
-# Expanded to include plurals + “no/not a seat” variants
-BLOCK_RX = re.compile(r"\b(pillars?|not\s*for\s*sale|no\s*seat|not\s*a\s*seat)\b", re.I)
+def extract_seat_list(seat_data):
+    """
+    Supports common structures:
+    - {"seats": [...]}
+    - {"data": {"seats": [...]}}
+    - direct list
+    """
+    if seat_data is None:
+        return []
+    if isinstance(seat_data, list):
+        return seat_data
+    if isinstance(seat_data, dict):
+        if "seats" in seat_data and isinstance(seat_data["seats"], list):
+            return seat_data["seats"]
+        if "data" in seat_data and isinstance(seat_data["data"], dict):
+            if "seats" in seat_data["data"] and isinstance(seat_data["data"]["seats"], list):
+                return seat_data["data"]["seats"]
+    return []
 
-def strip_brackets(s: str) -> str:
-    return BRACKET_RX.sub("", s or "").strip()
+def get_section_name(seat):
+    # Common fields
+    for k in ["section", "sectionName", "section_name", "area", "zone"]:
+        if k in seat and seat[k]:
+            return str(seat[k]).strip()
+    # Sometimes nested
+    if isinstance(seat.get("section"), dict) and seat["section"].get("name"):
+        return str(seat["section"]["name"]).strip()
+    return ""
 
-def is_blocked_label(seat: dict) -> bool:
-    """Identify seats that should never be on sale (pillar / not for sale / no seat)."""
-    raw = seat.get("number", "") or ""
-    label = seat.get("label", "") or ""
-    notes = seat.get("notes", "") or ""
-    text = strip_brackets(f"{raw} {label} {notes}".strip())
-    return bool(BLOCK_RX.search(text))
+def seat_label(seat):
+    # Common seat label fields
+    for k in ["label", "seatLabel", "seat_label", "name"]:
+        if k in seat and seat[k]:
+            return str(seat[k]).strip()
+    # Some formats store row/number separately
+    row = seat.get("row") or seat.get("Row") or ""
+    num = seat.get("number") or seat.get("Number") or seat.get("seatNumber") or ""
+    if row and num:
+        return f"{row}{num}"
+    return ""
+
+def parse_label_to_prefix_and_num(label: str):
+    """
+    Turns "A12" -> ("A", 12)
+          "ROW 1 - 12" already handled elsewhere, but for per-seat labels we want prefix+number.
+    """
+    label = (label or "").strip()
+    m = re.match(r"^([A-Za-z]+)\s*0*([0-9]+)$", label.replace(" ", ""))
+    if m:
+        return m.group(1).upper(), int(m.group(2))
+    m2 = re.match(r"^([0-9]+)$", label.replace(" ", ""))
+    if m2:
+        return "", int(m2.group(1))
+    return None
+
+def row_order_key(pref: str):
+    # Sort row prefixes like A, B, C, AA, AB; and also allow "" first
+    if pref is None:
+        pref = ""
+    p = pref.upper()
+    if p == "":
+        return (0, "")
+    return (1, len(p), p)
+
+def display_prefix(pref: str):
+    pref = (pref or "").strip()
+    if pref == "":
+        return ""
+    return f"{pref}"
 
 def compress_ranges(nums):
     nums = sorted(set(nums))
+    if not nums:
+        return []
+    ranges = []
+    start = prev = nums[0]
+    for n in nums[1:]:
+        if n == prev + 1:
+            prev = n
+        else:
+            ranges.append((start, prev))
+            start = prev = n
+    ranges.append((start, prev))
+    return ranges
+
+def parse_user_ranges(text: str):
+    """
+    Accepts input like:
+      "Stalls A1-A4, A5-A8"
+      "Rausing Circle ROW 1 - 1-6"
+      "A1-A10"
+      "ROW 1 - 1-6"
+      "1-6"
+    Returns list of dicts:
+      {"section": optional, "row": optional, "start": int, "end": int, "prefix": str}
+    We keep it flexible and interpret later with the selected section.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    parts = [p.strip() for p in re.split(r"[,\n]+", text) if p.strip()]
     out = []
-    for _, g in itertools.groupby(enumerate(nums), lambda x: x[1] - x[0]):
-        block = list(g)
-        s, e = block[0][1], block[-1][1]
-        out.append((s, e))
+    for p in parts:
+        # Try to match "Some Section ROW X - 1-6"
+        m = re.match(r"^(?:(.+?)\s+)?ROW\s*([A-Za-z0-9]+)\s*[-–]\s*([0-9]+)\s*[-–]\s*([0-9]+)$", p, re.IGNORECASE)
+        if m:
+            sec = (m.group(1) or "").strip()
+            row = str(m.group(2)).strip()
+            start = int(m.group(3))
+            end = int(m.group(4))
+            out.append({"section": sec, "row": row, "prefix": row, "start": start, "end": end})
+            continue
+
+        # Match "A1-A10" / "A1 - A10" / "1-6"
+        m2 = re.match(r"^([A-Za-z]*)([0-9]+)\s*[-–]\s*([A-Za-z]*)([0-9]+)$", p.replace(" ", ""))
+        if m2:
+            pref1, s1, pref2, s2 = m2.group(1), m2.group(2), m2.group(3), m2.group(4)
+            pref = (pref1 or pref2 or "").upper()
+            start = int(s1)
+            end = int(s2)
+            out.append({"section": "", "row": pref, "prefix": pref, "start": start, "end": end})
+            continue
+
+        # Match single "A12" or "12"
+        m3 = re.match(r"^([A-Za-z]*)([0-9]+)$", p.replace(" ", ""))
+        if m3:
+            pref = (m3.group(1) or "").upper()
+            n = int(m3.group(2))
+            out.append({"section": "", "row": pref, "prefix": pref, "start": n, "end": n})
+            continue
+
+        # Otherwise ignore
     return out
 
-def row_order_key(pref: str):
-    m = re.fullmatch(r"row(\d+)", pref)
-    if m:
-        return (0, -int(m.group(1)))
-    return (1, pref.upper())
-
-def display_prefix(pref: str) -> str:
-    if pref.startswith("row"):
-        m = re.match(r"row(\d+)$", pref)
-        if m:
-            return f"ROW {m.group(1)} - "
-    return pref.upper()
-
-def norm_label(s: str) -> str:
-    s = strip_brackets(s or "")
-    s = s.replace("–", "-").replace("—", "-")
-    s = s.replace("\u00a0", " ").replace("\u202f", " ")
-    s = s.lower().replace("seat", "")
-    s = re.sub(r"\s*-\s*", "-", s)
-    s = re.sub(r"\s+", "", s)
-    s = re.sub(r"row0?(\d+)", r"row\1", s)
-    return s
-
-def split_norm_label(norm: str):
-    norm = norm.replace("seat", "")
-    m = re.match(r"(row\d+)-?(\d+)$", norm)
-    if m:
-        return m.group(1), int(m.group(2))
-    m = re.match(r"([a-z][a-z\-]{0,19})(\d+)$", norm)
-    if m:
-        return m.group(1), int(m.group(2))
-    return None
-
 def section_names_from_data(seat_data):
+    seats = extract_seat_list(seat_data)
     names = []
-    for sec in seat_data.values():
-        if isinstance(sec, dict) and sec.get("section_name") and sec.get("type","def") != "aoi":
-            names.append(re.sub(r"\s+", " ", sec["section_name"].strip()))
-    return names
+    seen = set()
+    for s in seats:
+        sec = get_section_name(s)
+        if sec and sec.lower() not in seen:
+            names.append(sec)
+            seen.add(sec.lower())
+    return sorted(names, key=lambda x: x.lower())
 
-# Parse ranges (prices provided by fields; no inline @price)
-# Returns: set[(sec_low,pref,num)]
-def parse_ranges(user_text: str, section_names):
-    requested = set()
-    if not user_text:
-        return requested
+def apply_availability(seat_data, section_name, ranges, make_available: bool, price_value=None, price_only_mode=False):
+    """
+    Updates seat_data in-place.
+    - If price_only_mode is True: do NOT change status, only change price for seats in ranges
+    - Else: change status to 'AV' (available) or 'SO' (sold) for seats in ranges, optionally set price
+    """
+    seats = extract_seat_list(seat_data)
+    sec_target = norm(section_name)
 
-    canon_sections = {s.lower(): s for s in section_names if s}
-    chunks = [c.strip() for c in re.split(r"\s*,\s*", user_text) if c.strip()]
+    changed = 0
+    changed_price = 0
 
-    rx = re.compile(
-        r"(?:(row)\s*(\d+)\s*(?:-|–)?\s*(\d+)\s*(?:to|–|-)\s*(\d+))"     # ROW X - a-b
-        r"|(?:(row)\s*(\d+)\s*(?:-|–)?\s*(\d+))"                         # ROW X - a
-        r"|([a-z][a-z\-]{0,19})\s*(\d+)\s*(?:\s*(?:to|–|-)\s*(\d+))?",   # A11-21, Yellow 1-12
-        re.I
-    )
-
-    for chunk in chunks:
-        sec_match = None
-        chunk_low = chunk.lower()
-        for low_name, canon in sorted(canon_sections.items(), key=lambda x: len(x[0]), reverse=True):
-            if chunk_low.startswith(low_name):
-                after = chunk_low[len(low_name):]
-                if after == "" or (after and after[0].isspace()):
-                    sec_match = (low_name, canon)
-                    break
-        if not sec_match:
+    for seat in seats:
+        sec = norm(get_section_name(seat))
+        if sec != sec_target:
             continue
 
-        sec_low, sec_canon = sec_match
-        rest = chunk[len(sec_canon):].strip()
-
-        for m in rx.finditer(rest):
-            if m.group(1):  # ROW X - a-b
-                rownum = int(m.group(2)); a = int(m.group(3)); b = int(m.group(4))
-                lo, hi = sorted((a, b)); pref = f"row{rownum}"
-                for n in range(lo, hi + 1):
-                    requested.add((sec_low, pref, n))
-            elif m.group(5):  # ROW X - a
-                rownum = int(m.group(6)); n = int(m.group(7)); pref = f"row{rownum}"
-                requested.add((sec_low, pref, n))
-            else:  # alpha/word prefix
-                pref = m.group(8).lower()
-                a = int(m.group(9)); b = int(m.group(10) or m.group(9))
-                lo, hi = sorted((a, b))
-                for n in range(lo, hi + 1):
-                    requested.add((sec_low, pref, n))
-    return requested
-
-def set_row_price_to_max_only(seat_data):
-    """Set row['price'] to the highest numeric seat price found in that row. Never modifies seat prices."""
-    rows_updated = 0
-    for sec in seat_data.values():
-        if not isinstance(sec, dict) or sec.get("type") == "aoi":
+        label = seat_label(seat)
+        split = parse_label_to_prefix_and_num(label)
+        if not split:
             continue
-        rows = (sec.get("rows") or {})
-        for row in rows.values():
-            seats = (row.get("seats") or {})
-            max_price = None
-            for seat in seats.values():
-                s = (str(seat.get("price")) if seat.get("price") is not None else "").strip()
-                if re.match(r"^\d+(?:\.\d+)?$", s):
-                    p = float(s)
-                    max_price = p if max_price is None else max(max_price, p)
-            if max_price is not None:
-                row["price"] = str(max_price)
-                rows_updated += 1
-    return rows_updated
 
-# ──────────────── main UI logic ────────────────
-if uploaded_file:
-    try:
-        seat_data = json.loads(uploaded_file.read().decode("utf-8"))
-        st.success("✅ Seat map loaded successfully!")
+        pref, num = split
+        for r in ranges:
+            if norm(r.get("section","")) and norm(r.get("section","")) != sec_target:
+                continue
+            rp = (r.get("prefix") or "").upper()
+            if rp != pref:
+                continue
+            if r["start"] <= num <= r["end"]:
+                # matched
+                if price_only_mode:
+                    if price_value is not None and str(price_value).strip() != "":
+                        seat["price"] = str(price_value).strip()
+                        changed_price += 1
+                else:
+                    seat["status"] = "AV" if make_available else "SO"
+                    changed += 1
+                    if price_value is not None and str(price_value).strip() != "":
+                        seat["price"] = str(price_value).strip()
+                        changed_price += 1
+                break
 
-        # Normalise section names
-        for sec in seat_data.values():
-            if isinstance(sec, dict) and "section_name" in sec:
-                sec["section_name"] = re.sub(r"\s+", " ", sec["section_name"]).strip()
+    return changed, changed_price
 
-        # Build seat index: (section_low, prefix, number) -> (seat_obj, display_section)
-        seat_index = {}
+# ---------- Sidebar controls ----------
+st.sidebar.header("Settings")
+
+mode = st.sidebar.radio(
+    "What do you want to do?",
+    ["Set seats to Available / Sold", "Update prices only (don’t change availability)"],
+    index=0
+)
+
+price_only_mode = (mode == "Update prices only (don’t change availability)")
+
+multi_price_mode = st.sidebar.checkbox("Multiple price groups", value=False)
+make_available = st.sidebar.radio("Availability action", ["Make Available", "Make Sold"], index=0)
+make_available_bool = (make_available == "Make Available")
+
+uploaded = st.file_uploader("Upload your seatmap JSON file", type=["json"])
+
+seat_data = None
+if uploaded:
+    seat_data = safe_load_json(uploaded)
+
+if seat_data:
+    seats = extract_seat_list(seat_data)
+    if not seats:
+        st.warning("Could not find a list of seats in this JSON.")
+    else:
+        # ---------- Build index for copy helper ----------
+        seat_index = {}  # (sec_low, pref, num) -> (seat_obj, sec_disp)
         per_section_counts = defaultdict(int)
 
-        for sec in seat_data.values():
-            if not isinstance(sec, dict):
+        for seat in seats:
+            sec_disp = get_section_name(seat)
+            sec_low = norm(sec_disp)
+            label = seat.get("label", "") or seat.get("seatLabel", "") or seat.get("name", "") or ""
+            split = parse_label_to_prefix_and_num(label)
+            if not split:
                 continue
-            if sec.get("type", "def") == "aoi":
-                continue
-            sec_disp = sec.get("section_name", "Unknown Section").strip()
-            sec_low = sec_disp.lower()
-            rows = sec.get("rows", {}) or {}
-            for row in rows.values():
-                seats = (row.get("seats") or {}) or {}
-                for seat in seats.values():
-                    # Block seats upfront if labelled pillar / not for sale / no seat
-                    if is_blocked_label(seat):
-                        seat["status"] = "uav"
-
-                    raw = seat.get("number", "")
-                    norm = norm_label(raw)
-                    split = split_norm_label(norm)
-                    if not split:
-                        continue
-                    pref, num = split
-                    key = (sec_low, pref, num)
-                    seat_index[key] = (seat, sec_disp)
-                    per_section_counts[sec_low] += 1
+            pref, num = split
+            key = (sec_low, pref, num)
+            seat_index[key] = (seat, sec_disp)
+            per_section_counts[sec_low] += 1
 
         st.caption(f"Indexed seats: {len(seat_index)} across {len(per_section_counts)} sections.")
 
@@ -210,6 +278,54 @@ if uploaded_file:
         else:
             st.info("No available seats found.")
 
+        # Optional: split the copy/paste helper by PRICE (for AV seats)
+        split_copy_by_price = st.checkbox("💷 Split the copy/paste list by price (AV seats)", value=True)
+
+        if split_copy_by_price:
+            # Build: (sec_disp, seat_price, pref) -> [seat_nums...]
+            tier_row_map = defaultdict(list)
+            tier_counts = defaultdict(int)
+
+            for (sec_low, pref, num), (seat, sec_disp) in seat_index.items():
+                if (seat.get("status", "") or "").lower() != "av":
+                    continue
+                seat_price = str(seat.get("price", "")).strip() or "∅"
+                tier_row_map[(sec_disp, seat_price, pref)].append(num)
+                tier_counts[(sec_disp, seat_price)] += 1
+
+            if tier_row_map:
+                st.markdown("### 💷 Copy-Paste Friendly Available Seat Ranges (split by price)")
+
+                tier_lines = defaultdict(list)  # (sec_disp, price) -> [formatted range strings]
+
+                for (sec_disp, price, pref), nums in sorted(
+                    tier_row_map.items(),
+                    key=lambda x: (x[0][0].lower(), str(x[0][1]), row_order_key(x[0][2]))
+                ):
+                    for s, e in compress_ranges(nums):
+                        disp_pref = display_prefix(pref)
+                        tier_lines[(sec_disp, price)].append(
+                            f"{sec_disp} {disp_pref}{s}" if s == e else f"{sec_disp} {disp_pref}{s}-{e}"
+                        )
+
+                # Render one copy box per tier (section + price)
+                for (sec_disp, price), lines_ in sorted(
+                    tier_lines.items(),
+                    key=lambda x: (x[0][0].lower(), str(x[0][1]))
+                ):
+                    count = tier_counts[(sec_disp, price)]
+                    title = f"{sec_disp} — £{price}" if price != "∅" else f"{sec_disp} — (no price)"
+                    with st.expander(f"{title} ({count} AV seats)", expanded=False):
+                        safe_key = re.sub(r"[^a-zA-Z0-9]+", "_", f"{sec_disp}_{price}")[:80]
+                        st.text_area(
+                            "Copy/paste:",
+                            value=", ".join(lines_),
+                            height=160,
+                            key=f"copy_tier_{safe_key}"
+                        )
+            else:
+                st.info("No AV seats found to split by price.")
+
         # ---------- Price inputs ----------
         section_names = section_names_from_data(seat_data)
 
@@ -219,10 +335,11 @@ if uploaded_file:
             groups = []
             for i in range(int(group_count)):
                 st.markdown(f"#### Price Group {i+1}")
-                rng = st.text_input(
+                rng = st.text_area(
                     f"Seat ranges for Group {i+1}",
-                    placeholder="e.g. Stalls A1-A4, A5-A8  or  Rausing Circle ROW 1 - 1-6",
-                    key=f"range_{i+1}"
+                    placeholder="e.g.\nStalls A1-A4, A5-A8\nRausing Circle ROW 1 - 1-6",
+                    key=f"range_{i+1}",
+                    height=120
                 )
                 prc = st.text_input(f"Price {i+1}", placeholder="e.g. 60", key=f"price_{i+1}")
                 groups.append({"range": (rng or "").strip(), "price": (prc or "").strip()})
@@ -231,271 +348,126 @@ if uploaded_file:
                 st.info("Tier editing is active (price-only mode). Availability will not change.")
 
         else:
-            seat_range_input = st.text_input(
+            seat_range_input = st.text_area(
                 "Enter seat ranges",
-                placeholder="Rausing Circle ROW 1 - 1-6, Stalls A1-A5"
+                placeholder="e.g.\nRausing Circle ROW 1 - 1-6\nStalls A1-A5",
+                height=120
             )
             if price_only_mode:
                 price_input = None
                 st.info("Tier editing is active (price-only mode). Availability will not change.")
             else:
-                price_input = st.text_input("Enter new price", placeholder="e.g. 65")
+                price_input = st.text_input("Optional: set price for these seats", placeholder="e.g. 60")
 
-        # ----- Seamless Tier Detection UI (auto when price-only mode is on) -----
-        tier_new_values = {}
-        tier_listing = []
-        tier_keys_order = []
+        section_choice = st.selectbox("Select section to edit", options=section_names)
 
-        if price_only_mode:
-            tiers = defaultdict(list)  # (sec_disp, price) -> [ (sec_disp, pref, num, seat) ]
-            for (sec_low, pref, num), (seat, sec_disp) in seat_index.items():
-                if (seat.get("status","") or "").lower() != "av":
-                    continue
-                seat_price = str(seat.get("price","")).strip() or "∅"
-                key = (sec_disp, seat_price)
-                tiers[key].append((sec_disp, pref, num, seat))
-
-            st.markdown("### 🧮 Price tiers (AV seats, grouped by section)")
-            if not tiers:
-                st.info("No AV tiers found.")
-            else:
-                for i, (key, seats) in enumerate(sorted(tiers.items(), key=lambda kv: (kv[0][0].lower(), kv[0][1]))):
-                    sec_disp, price = key
-                    tier_label = f"{sec_disp} — £{price}" if price != "∅" else f"{sec_disp} — (no price)"
-                    count = len(seats)
-                    sample_locs = []
-                    for (sdisp, pref, num, _seat) in seats[:6]:
-                        pp = "ROW " + pref[3:] if pref.startswith("row") else pref.upper()
-                        sample_locs.append(f"{sdisp} {pp}-{num}")
-
-                    tier_listing.append({
-                        "Tier": tier_label,
-                        "Seats (count)": count,
-                        "Sample": ", ".join(sample_locs) + (" …" if count > 6 else "")
-                    })
-                    tier_keys_order.append(key)
-
-                st.dataframe(tier_listing, use_container_width=True)
-                st.markdown("#### ✏️ Update each tier (leave blank to skip)")
-                for i, key in enumerate(tier_keys_order):
-                    sec_disp, price = key
-                    caption = f"New price for **{sec_disp}** where current price = **{price if price!='∅' else '∅ (no price)'}**"
-                    val = st.text_input(f"→ {caption}", key=f"tier_new_{i}", placeholder="leave blank to skip")
-                    val = (val or "").strip()
-                    if val:
-                        if not re.match(r"^\d+(?:\.\d+)?$", val):
-                            st.warning(f"'{val}' doesn’t look like a number — this tier will be skipped unless corrected.")
-                        else:
-                            tier_new_values[key] = val
-
-        # ----- Parse input ranges (single or multi mode) -----
-        requested_single = set()
-        parsed_groups = []   # list of dicts: {"seats": set(keys), "price": "xx"}
-        if multi_price_mode:
-            for g in groups:
-                seats = parse_ranges(g["range"], section_names) if g["range"] else set()
-                parsed_groups.append({"seats": seats, "price": g["price"]})
-            # Overlap preview across ANY number of groups
-            all_keys = [k for g in parsed_groups for k in g["seats"]]
-            dup_counts = Counter(all_keys)
-            overlaps = {k for k, c in dup_counts.items() if c > 1}
-            total_targets = sum(len(g["seats"]) for g in parsed_groups)
-            st.markdown("### 🔎 Parsed Seat Targets (Preview)")
-            st.write(f"Groups: **{len(parsed_groups)}** | Total seats targeted (with duplicates): **{total_targets}** | Overlapping seats: **{len(overlaps)}**")
-            if overlaps:
-                # show a small sample
-                sec_title = {s.lower(): s for s in section_names}
-                def pretty(k):
-                    sec_low, pref, n = k
-                    sec_disp = sec_title.get(sec_low, "?")
-                    pp = "ROW " + pref[3:] if pref.startswith("row") else pref.upper()
-                    return f"{sec_disp} {pp}-{n}"
-                sample = ", ".join(pretty(k) for k in sorted(list(overlaps))[:12])
-                st.warning(f"⚠️ Overlaps detected. Earlier groups take precedence. Sample: {sample}{' …' if len(overlaps)>12 else ''}")
-        else:
-            if 'seat_range_input' in locals() and seat_range_input:
-                requested_single = parse_ranges(seat_range_input, section_names)
-                st.markdown("### 🔎 Parsed Seat Targets (Preview)")
-                st.write(f"Targets parsed: **{len(requested_single)}** seats")
-
-        # ----- Apply updates -----
-        if st.button("▶️ Go"):
-            matched = []
-            updated_seats = []
-            missing = []
-
-            # 1) Apply Tier Price Edits FIRST (so later logic won't clobber)
-            if price_only_mode and tier_new_values:
-                changed = 0
-                for (sec_low, pref, num), (seat, sec_disp) in seat_index.items():
-                    if (seat.get("status","") or "").lower() != "av":
-                        continue
-                    cur_price = str(seat.get("price","")).strip() or "∅"
-                    new_p = tier_new_values.get((sec_disp, cur_price))
-                    if new_p:
-                        seat["price"] = str(new_p)
-                        changed += 1
-                if changed:
-                    st.success(f"💸 Updated {changed} AV seats via tier edits.")
-
-            # 2) Multiple price groups mode (ANY number of groups)
+        # ---------- Apply changes ----------
+        if st.button("Apply changes"):
             if multi_price_mode:
-                # Build first-come precedence assignment map: key -> (group_index, price)
-                assignment = {}  # seat_key -> (idx, price_str)
-                for idx, g in enumerate(parsed_groups):
-                    price = (g["price"] or "").strip()
-                    for key in g["seats"]:
-                        if key not in seat_index:
-                            missing.append(key)
-                            continue
-                        if key in assignment:
-                            # already assigned by earlier group -> skip (precedence)
-                            continue
-                        assignment[key] = (idx, price)
+                total_changed = 0
+                total_price_changed = 0
 
-                # Availability changes (not in price-only mode)
-                if not price_only_mode:
-                    for key, (idx, _price) in assignment.items():
-                        seat, sec_disp = seat_index[key]
-                        if is_blocked_label(seat):
-                            seat["status"] = "uav"
-                            continue
-                        if (seat.get("status","") or "").lower() != "av":
-                            seat["status"] = "av"
-                            updated_seats.append({
-                                "Section": sec_disp,
-                                "Seat": seat.get("number",""),
-                                "Status": "av",
-                                "Price": seat.get("price","")
-                            })
-                        matched.append(f"{sec_disp} {seat.get('number','').strip()}")
+                for g in groups:
+                    rng_text = g["range"]
+                    prc = g["price"]
 
-                # Apply prices per assignment (only if a price was provided for that group)
-                for key, (idx, price) in assignment.items():
-                    if price:
-                        seat, _ = seat_index[key]
-                        seat["price"] = str(price)
-
-                # AUTO: Limit availability to selected ranges (UAV everything else) — only when NOT price-only
-                if not price_only_mode:
-                    targeted = set(assignment.keys())
-                    turned_off = 0
-                    for key, (seat, _) in seat_index.items():
-                        if key not in targeted:
-                            if (seat.get("status","") or "").lower() != "uav":
-                                seat["status"] = "uav"
-                                turned_off += 1
-                    if turned_off:
-                        st.info(f"🔕 Set {turned_off} non-targeted seats to UAV.")
-
-            # 3) Single range + price mode
-            else:
-                if not price_only_mode and requested_single:
-                    for key in requested_single:
-                        if key in seat_index:
-                            seat, sec_disp = seat_index[key]
-                            if is_blocked_label(seat):
-                                seat["status"] = "uav"
-                                continue
-                            if (seat.get("status","") or "").lower() != "av":
-                                seat["status"] = "av"
-                                updated_seats.append({
-                                    "Section": sec_disp,
-                                    "Seat": seat.get("number",""),
-                                    "Status": "av",
-                                    "Price": seat.get("price","")
-                                })
-                            matched.append(f"{sec_disp} {seat.get('number','').strip()}")
-                        else:
-                            missing.append(key)
-
-                if not price_only_mode and 'price_input' in locals() and price_input:
-                    for key in requested_single:
-                        if key in seat_index:
-                            seat, _ = seat_index[key]
-                            seat["price"] = str(price_input)
-
-                if not price_only_mode:
-                    targeted = requested_single
-                    turned_off = 0
-                    for key, (seat, _) in seat_index.items():
-                        if key not in targeted:
-                            if (seat.get("status","") or "").lower() != "uav":
-                                seat["status"] = "uav"
-                                turned_off += 1
-                    if turned_off:
-                        st.info(f"🔕 Set {turned_off} non-targeted seats to UAV.")
-
-            # Always keep "pillar / not for sale / no seat" seats unavailable (final enforcement)
-            blocked_kept_uav = 0
-            for (key, (seat, _)) in seat_index.items():
-                if is_blocked_label(seat) and (seat.get("status","").lower() != "uav"):
-                    seat["status"] = "uav"
-                    blocked_kept_uav += 1
-            if blocked_kept_uav:
-                st.info(f"🚫 Kept {blocked_kept_uav} 'pillar / not for sale / no seat' seats as UAV.")
-
-            # Post-ops messaging
-            if not price_only_mode:
-                if matched:
-                    st.markdown("### ✅ Availability Updated")
-                    st.write(", ".join(sorted(matched)))
-                if missing:
-                    sec_title = {s.lower(): s for s in section_names}
-                    pretty = [f"{sec_title.get(sec,'?')} {(pref.upper() if not pref.startswith('row') else 'ROW ' + pref[3:])}-{n}" for (sec, pref, n) in sorted(set(missing))]
-                    st.warning("⚠️ Seats not found: " + ", ".join(pretty))
-
-            if updated_seats:
-                st.markdown("### 🎟️ Updated Seats")
-                st.dataframe(updated_seats, use_container_width=True)
-
-            # --- Row price = max of seat prices in that row (never touches seat prices) ---
-            rows_updated = set_row_price_to_max_only(seat_data)
-            if rows_updated:
-                st.info(f"📏 Row prices set to the highest seat price in {rows_updated} rows.")
-
-            # Optional: show seats priced below their row (visibility only)
-            mismatches = []
-            for sec in seat_data.values():
-                if not isinstance(sec, dict) or sec.get("type") == "aoi":
-                    continue
-                rows = (sec.get("rows") or {})
-                for row_name, row in rows.items():
-                    row_price_s = (str(row.get("price")) if row.get("price") is not None else "").strip()
-                    row_price = float(row_price_s) if re.match(r"^\d+(?:\.\d+)?$", row_price_s) else None
-                    if row_price is None:
+                    parsed = parse_user_ranges(rng_text)
+                    if not parsed:
                         continue
-                    seats = (row.get("seats") or {})
-                    for seat in seats.values():
-                        seat_num = seat.get("number","")
-                        seat_price_s = (str(seat.get("price")) if seat.get("price") is not None else "").strip()
-                        if re.match(r"^\d+(?:\.\d+)?$", seat_price_s):
-                            seat_price = float(seat_price_s)
-                            if seat_price < row_price:
-                                mismatches.append({
-                                    "Section": sec.get("section_name",""),
-                                    "Row": row_name,
-                                    "Seat": seat_num,
-                                    "Row Price": row_price_s,
-                                    "Seat Price": seat_price_s
-                                })
-            if mismatches:
-                st.markdown("### 🔎 Seats priced below their row (expected, just for visibility)")
-                st.dataframe(mismatches[:300], use_container_width=True)
 
-            # Sample price summary
-            st.markdown("### 📊 Seat Price Summary (sample)")
-            sample = []
-            for i, ((sec_low, pref, num), (seat, sec_disp)) in enumerate(sorted(seat_index.items())[:300]):
-                sample.append({"Section": sec_disp, "Seat": seat.get("number",""), "Price": seat.get("price","")})
-            st.dataframe(sample, use_container_width=True)
+                    changed, changed_price = apply_availability(
+                        seat_data=seat_data,
+                        section_name=section_choice,
+                        ranges=parsed,
+                        make_available=make_available_bool,
+                        price_value=prc,
+                        price_only_mode=price_only_mode
+                    )
+                    total_changed += changed
+                    total_price_changed += changed_price
 
-            st.download_button(
-                "Download Updated JSON",
-                json.dumps(seat_data, indent=2),
-                file_name="updated_seatmap.json",
-                mime="application/json"
-            )
+                if price_only_mode:
+                    st.success(f"Updated prices for **{total_price_changed}** seats (availability unchanged).")
+                else:
+                    st.success(
+                        f"Updated availability for **{total_changed}** seats, and updated prices for **{total_price_changed}** seats."
+                    )
 
-    except Exception as e:
-        st.error(f"❌ Error reading file: {e}")
+            else:
+                parsed = parse_user_ranges(seat_range_input)
+                if not parsed:
+                    st.warning("No valid seat ranges found. Check your format.")
+                else:
+                    changed, changed_price = apply_availability(
+                        seat_data=seat_data,
+                        section_name=section_choice,
+                        ranges=parsed,
+                        make_available=make_available_bool,
+                        price_value=price_input if not price_only_mode else None,
+                        price_only_mode=price_only_mode
+                    )
+                    if price_only_mode:
+                        st.success(f"Updated prices for **{changed_price}** seats (availability unchanged).")
+                    else:
+                        st.success(f"Updated availability for **{changed}** seats, and updated prices for **{changed_price}** seats.")
+
+        # ---------- Tier editor (price-only mode helper) ----------
+        if price_only_mode:
+            st.markdown("---")
+            st.markdown("## 💷 Tier overview (Section + Price)")
+            tier_map = defaultdict(list)  # (sec_disp, price) -> [seat]
+            for seat in seats:
+                sec = get_section_name(seat)
+                price = str(seat.get("price", "")).strip() or "∅"
+                tier_map[(sec, price)].append(seat)
+
+            # Build a small table
+            tier_listing = []
+            tier_keys_order = []
+            for key in sorted(tier_map.keys(), key=lambda x: (x[0].lower(), str(x[1]))):
+                sec_disp, price = key
+                count = len(tier_map[key])
+                # sample seats
+                sample = []
+                for s in tier_map[key][:6]:
+                    sample.append(seat_label(s))
+                tier_listing.append({
+                    "Tier": f"{sec_disp} | {price}",
+                    "Seats (count)": count,
+                    "Sample": ", ".join(sample) + (" …" if count > 6 else "")
+                })
+                tier_keys_order.append(key)
+
+            st.dataframe(tier_listing, use_container_width=True)
+
+            st.markdown("#### ✏️ Update each tier (leave blank to skip)")
+            tier_updates = {}
+            for i, key in enumerate(tier_keys_order):
+                sec_disp, price = key
+                caption = f"New price for **{sec_disp}** where current price = **{price if price!='∅' else '∅ (no price)'}**"
+                val = st.text_input(f"→ {caption}", key=f"tier_new_{i}", placeholder="leave blank to skip")
+                val = (val or "").strip()
+                if val:
+                    tier_updates[key] = val
+
+            if st.button("Apply tier price updates"):
+                updated_count = 0
+                for (sec_disp, price), new_price in tier_updates.items():
+                    for seat in tier_map[(sec_disp, price)]:
+                        seat["price"] = new_price
+                        updated_count += 1
+                st.success(f"Updated **{updated_count}** seats across {len(tier_updates)} tiers.")
+
+        # ---------- Download ----------
+        st.markdown("---")
+        st.markdown("## Download updated JSON")
+        out_json = json.dumps(seat_data, indent=2)
+        st.download_button(
+            "Download JSON",
+            data=out_json,
+            file_name="seatmap_updated.json",
+            mime="application/json"
+        )
+
+else:
+    st.info("Upload a seatmap JSON file to begin.")
