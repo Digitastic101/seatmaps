@@ -17,6 +17,7 @@ BRACKET_RX = re.compile(r"(\([^)]*\))")
 BLOCK_WORDS = [
     "pillar", "pillars",
     "space", "spaces",
+    "blank", "blanks",
     "aisle", "aisles",
     "gap", "gaps",
     "void",
